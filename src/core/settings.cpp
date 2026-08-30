@@ -136,6 +136,16 @@ void AppSettings::setWindowMaximized(bool maximized)
     m_settings.setValue(QStringLiteral("windowMaximized"), maximized);
 }
 
+QByteArray AppSettings::windowGeometry() const
+{
+    return m_settings.value(QStringLiteral("windowGeometry")).toByteArray();
+}
+
+void AppSettings::setWindowGeometry(const QByteArray &geometry)
+{
+    m_settings.setValue(QStringLiteral("windowGeometry"), geometry);
+}
+
 bool AppSettings::sectionExpanded(const QString &id, bool fallback) const
 {
     return m_settings.value(QStringLiteral("fold/%1").arg(id), fallback).toBool();
@@ -242,4 +252,9 @@ QKeySequence AppSettings::pauseHotkey() const
 void AppSettings::setPauseHotkey(const QKeySequence &seq)
 {
     setKeySequence(QStringLiteral("pauseHotkey"), seq);
+}
+
+void AppSettings::sync()
+{
+    m_settings.sync();
 }

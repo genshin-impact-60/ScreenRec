@@ -130,9 +130,11 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowIcon(QIcon(QStringLiteral(":/assets/app.png")));
     setupUi();
     setupTray();
+    m_loadingSettings = true;
     connectSignals();
     refreshScreens();
     loadSettings();
+    m_loadingSettings = false;
     updateModeRows();
     updateRegionLabel();
     updateHint();
@@ -453,14 +455,33 @@ void MainWindow::connectSignals()
     connect(m_startButton, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_browseButton, &QPushButton::clicked, this, &MainWindow::onBrowseClicked);
     connect(m_openFolderButton, &QPushButton::clicked, this, &MainWindow::onOpenFolderClicked);
-    connect(m_screenCombo, &QComboBox::currentIndexChanged, this, &MainWindow::onScreenSelectionChanged);
+    connect(m_screenCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        onScreenSelectionChanged();
+        saveSettings();
+    });
     connect(m_regionButton, &QPushButton::clicked, this, &MainWindow::onSelectRegionClicked);
     connect(m_clearRegionButton, &QPushButton::clicked, this, &MainWindow::onClearRegionClicked);
-    connect(m_modeGroup, &QButtonGroup::idClicked, this, [this](int) { onModeChanged(); });
-    connect(m_hotkeyCheck, &QCheckBox::toggled, this, &MainWindow::applyHotkeys);
-    connect(m_startHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
-    connect(m_stopHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
-    connect(m_pauseHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
+    connect(m_modeGroup, &QButtonGroup::idClicked, this, [this](int) {
+        onModeChanged();
+        saveSettings();
+    });
+    connect(m_hotkeyCheck, &QCheckBox::toggled, this, [this]() {
+        applyHotkeys();
+        saveSettings();
+    });
+    connect(m_startHotkeyEdit, &QKeySequenceEdit::editingFinished, this, [this]() {
+        applyHotkeys();
+        saveSettings();
+    });
+    connect(m_stopHotkeyEdit, &QKeySequenceEdit::editingFinished, this, [this]() {
+        applyHotkeys();
+        saveSettings();
+    });
+    connect(m_pauseHotkeyEdit, &QKeySequenceEdit::editingFinished, this, [this]() {
+        applyHotkeys();
+        saveSettings();
+    });
+    connect(m_pathEdit, &QLineEdit::editingFinished, this, &MainWindow::saveSettings);
     connect(m_resetHotkeysButton, &QPushButton::clicked, this, &MainWindow::resetHotkeys);
     connect(m_backButton, &QToolButton::clicked, this, &MainWindow::showRecorderPage);
     connect(m_summaryButton, &QPushButton::clicked, this, &MainWindow::showSettingsPage);
@@ -482,10 +503,20 @@ void MainWindow::connectSignals()
     connect(m_countdownCombo, &QComboBox::currentIndexChanged, this, [this]() {
         updateHint();
         updateSummary();
+        saveSettings();
     });
-    connect(m_resolutionCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateSummary);
-    connect(m_fpsCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateSummary);
-    connect(m_qualityCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateSummary);
+    connect(m_resolutionCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        updateSummary();
+        saveSettings();
+    });
+    connect(m_fpsCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        updateSummary();
+        saveSettings();
+    });
+    connect(m_qualityCombo, &QComboBox::currentIndexChanged, this, [this]() {
+        updateSummary();
+        saveSettings();
+    });
 
     connect(qGuiApp, &QGuiApplication::screenAdded, this, &MainWindow::refreshScreens);
     connect(qGuiApp, &QGuiApplication::screenRemoved, this, &MainWindow::refreshScreens);
@@ -494,6 +525,7 @@ void MainWindow::connectSignals()
         m_region = rect;
         updateRegionLabel();
         updateSummary();
+        saveSettings();
         if (m_startAfterRegion) {
             m_startAfterRegion = false;
             actuallyStart();
@@ -594,6 +626,11 @@ void MainWindow::connectSignals()
 
 void MainWindow::loadSettings()
 {
+    const bool wasLoading = m_loadingSettings;
+    m_loadingSettings = true;
+
+    restoreWindowGeometry();
+
     m_pathEdit->setText(QDir::toNativeSeparators(m_settings->outputDirectory()));
     m_micCheck->setChecked(m_settings->recordMicrophone());
     m_systemAudioCheck->setChecked(m_settings->recordSystemAudio());
@@ -621,12 +658,19 @@ void MainWindow::loadSettings()
     const int qualityIndex = m_qualityCombo->findData(m_settings->quality());
     m_qualityCombo->setCurrentIndex(qualityIndex >= 0 ? qualityIndex : 2);
 
-    restoreWindowGeometry();
     updateIdleStatus();
+    m_loadingSettings = wasLoading;
 }
 
 void MainWindow::restoreWindowGeometry()
 {
+    const QByteArray geometry = m_settings->windowGeometry();
+    if (!geometry.isEmpty() && restoreGeometry(geometry)) {
+        if (isMinimized())
+            setWindowState(windowState() & ~Qt::WindowMinimized);
+        return;
+    }
+
     QSize size = m_settings->windowSize();
     if (size.width() >= minimumWidth() && size.height() >= minimumHeight()) {
         if (QScreen *screen = QGuiApplication::primaryScreen()) {
@@ -638,6 +682,20 @@ void MainWindow::restoreWindowGeometry()
     }
     if (m_settings->windowMaximized())
         setWindowState(windowState() | Qt::WindowMaximized);
+}
+
+void MainWindow::persistWindowGeometry()
+{
+    if (!m_geometryRestored || isMinimized())
+        return;
+
+    const QSize sz = isMaximized() ? normalGeometry().size() : size();
+    if (sz.width() < minimumWidth() || sz.height() < minimumHeight())
+        return;
+
+    m_settings->setWindowGeometry(saveGeometry());
+    m_settings->setWindowSize(sz);
+    m_settings->setWindowMaximized(isMaximized());
 }
 
 void MainWindow::refreshScreens()
@@ -670,6 +728,9 @@ void MainWindow::refreshScreens()
 
 void MainWindow::saveSettings()
 {
+    if (m_loadingSettings)
+        return;
+
     m_settings->setOutputDirectory(m_pathEdit->text().trimmed());
     m_settings->setRecordMicrophone(m_micCheck->isChecked());
     m_settings->setRecordSystemAudio(m_systemAudioCheck->isChecked());
@@ -686,10 +747,8 @@ void MainWindow::saveSettings()
     m_settings->setPauseHotkey(m_pauseHotkeyEdit->keySequence());
     m_settings->setLastSavedPath(m_lastSavedPath);
     m_settings->setLastDurationMs(m_lastDurationMs);
-    if (!isMinimized()) {
-        m_settings->setWindowSize(isMaximized() ? normalGeometry().size() : size());
-        m_settings->setWindowMaximized(isMaximized());
-    }
+    persistWindowGeometry();
+    m_settings->sync();
 }
 
 void MainWindow::updateModeRows()
@@ -945,8 +1004,10 @@ void MainWindow::onBrowseClicked()
     const QString dir = QFileDialog::getExistingDirectory(
         this, tr("选择保存目录"), m_pathEdit->text(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
-    if (!dir.isEmpty())
+    if (!dir.isEmpty()) {
         m_pathEdit->setText(QDir::toNativeSeparators(dir));
+        saveSettings();
+    }
 }
 
 void MainWindow::onOpenFolderClicked()
@@ -1052,6 +1113,7 @@ void MainWindow::resetHotkeys()
     m_stopHotkeyEdit->setKeySequence(AppSettings::defaultStopHotkey());
     m_pauseHotkeyEdit->setKeySequence(AppSettings::defaultPauseHotkey());
     applyHotkeys();
+    saveSettings();
 }
 
 void MainWindow::clampRegion()
@@ -1265,6 +1327,10 @@ RecordingController::Request MainWindow::currentRequest() const
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
+    if (!m_geometryRestored) {
+        restoreWindowGeometry();
+        m_geometryRestored = true;
+    }
     excludeWidgetFromCapture(this);
     if (!m_hotkeysReady) {
         m_hotkeys->setNativeHandle(quintptr(winId()));
@@ -1278,6 +1344,7 @@ void MainWindow::showEvent(QShowEvent *event)
 
 void MainWindow::hideEvent(QHideEvent *event)
 {
+    persistWindowGeometry();
     QMainWindow::hideEvent(event);
     syncPreviewTimer();
     syncAudioMonitor();

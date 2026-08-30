@@ -71,6 +71,7 @@ private:
     void onSelectRegionClicked();
     void onClearRegionClicked();
     void restoreWindowGeometry();
+    void persistWindowGeometry();
     void onModeChanged();
     void onHotkey(int id);
     void beginRegionSelect();
@@ -148,6 +149,8 @@ private:
     bool m_closeAfterStop = false;
     bool m_hotkeysReady = false;
     bool m_startAfterRegion = false;
+    bool m_geometryRestored = false;
+    bool m_loadingSettings = false;
     int m_countdownShown = 0;
 };
 

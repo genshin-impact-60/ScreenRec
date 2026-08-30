@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.19)
-project(ScreenRec VERSION 1.2.0 LANGUAGES CXX)
+project(ScreenRec VERSION 1.2.1 LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia)
 
 qt_standard_project_setup()
 
 set(app_icon_windows "")
+set(app_version_windows "")
 if (WIN32)
     enable_language(RC)
     set(app_icon_windows "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.rc")
@@ -13,6 +14,22 @@ if (WIN32)
         OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/assets/app.ico"
     )
     set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} -I \"${CMAKE_CURRENT_SOURCE_DIR}/assets\"")
+
+    set(SCREENREC_VERSION_MAJOR "${PROJECT_VERSION_MAJOR}")
+    set(SCREENREC_VERSION_MINOR "${PROJECT_VERSION_MINOR}")
+    set(SCREENREC_VERSION_PATCH "${PROJECT_VERSION_PATCH}")
+    if (SCREENREC_VERSION_MINOR STREQUAL "")
+        set(SCREENREC_VERSION_MINOR 0)
+    endif()
+    if (SCREENREC_VERSION_PATCH STREQUAL "")
+        set(SCREENREC_VERSION_PATCH 0)
+    endif()
+    set(app_version_windows "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/version.rc.in"
+        "${app_version_windows}"
+        @ONLY
+    )
 endif()
 
 qt_add_executable(ScreenRec
@@ -47,6 +64,7 @@ qt_add_executable(ScreenRec
     src/capture/systemaudiocapture.cpp
     src/capture/systemaudiocapture.h
     ${app_icon_windows}
+    ${app_version_windows}
 )
 
 qt_add_resources(ScreenRec "icons"

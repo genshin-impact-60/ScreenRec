@@ -3,16 +3,23 @@ setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 title ScreenRec pack
 
-echo ========================================
-echo   ScreenRec pack
-echo ========================================
-echo.
-
 set "APP_NAME=ScreenRec"
-set "APP_VERSION=1.0.0"
+set "APP_VERSION="
+for /f "tokens=3" %%V in ('findstr /c:"ScreenRec VERSION" "%~dp0CMakeLists.txt"') do set "APP_VERSION=%%V"
+if not defined APP_VERSION (
+    echo [FAIL] Cannot read version from CMakeLists.txt
+    echo        Expected: project ScreenRec VERSION x.y.z
+    goto fail
+)
+
 set "BUILD_DIR=%~dp0build-release"
 set "DIST_DIR=%~dp0dist\%APP_NAME%"
 set "ZIP_PATH=%~dp0dist\%APP_NAME%-%APP_VERSION%-win64.zip"
+
+echo ========================================
+echo   ScreenRec pack  v%APP_VERSION%
+echo ========================================
+echo.
 
 if not defined QT_DIR set "QT_DIR=D:\APP\Qt\6.10.2\mingw_64"
 if not defined MINGW_DIR set "MINGW_DIR=D:\APP\Qt\Tools\mingw1310_64"
@@ -72,14 +79,39 @@ set "PATH=%MINGW_DIR%\bin;%QT_DIR%\bin;%PATH%"
 echo Qt      : %QT_DIR%
 echo MinGW   : %MINGW_DIR%
 echo CMake   : %CMAKE_EXE%
+echo Version : %APP_VERSION%
 echo Output  : %DIST_DIR%
 echo.
+
+set "NOTES_VERSION="
+if exist "%~dp0Update_notes.txt" (
+    for /f "tokens=2" %%V in ('findstr /b /c:"Ver " "%~dp0Update_notes.txt"') do set "NOTES_VERSION=%%V"
+)
+if defined NOTES_VERSION (
+    if /i not "!NOTES_VERSION!"=="!APP_VERSION!" (
+        echo [WARN] Update_notes.txt latest is !NOTES_VERSION!, CMakeLists.txt is !APP_VERSION!
+        echo.
+    )
+)
 
 echo [1/4] CMake configure Release ...
 "%CMAKE_EXE%" -S "%~dp0." -B "%BUILD_DIR%" -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="%QT_DIR%"
 if errorlevel 1 (
     echo [FAIL] CMake configure failed
     goto fail
+)
+
+set "CFG_VERSION="
+if exist "%BUILD_DIR%\CMakeCache.txt" (
+    for /f "tokens=2 delims==" %%V in ('findstr /b /c:"CMAKE_PROJECT_VERSION:STATIC=" "%BUILD_DIR%\CMakeCache.txt"') do set "CFG_VERSION=%%V"
+)
+if defined CFG_VERSION (
+    if /i not "!CFG_VERSION!"=="!APP_VERSION!" (
+        echo [WARN] CMakeLists.txt is !APP_VERSION! but this build is !CFG_VERSION!
+        echo        Using build version !CFG_VERSION! for the package name.
+    )
+    set "APP_VERSION=!CFG_VERSION!"
+    set "ZIP_PATH=%~dp0dist\%APP_NAME%-!APP_VERSION!-win64.zip"
 )
 
 echo.
@@ -132,6 +164,25 @@ if not exist "%DIST_DIR%\multimedia\ffmpegmediaplugin.dll" (
     goto fail
 )
 
+set "EXE_VERSION="
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Get-Item -LiteralPath '%DIST_DIR%\%APP_NAME%.exe').VersionInfo.ProductVersion"') do set "EXE_VERSION=%%V"
+if defined EXE_VERSION (
+    for /f "tokens=1 delims= " %%V in ("!EXE_VERSION!") do set "EXE_VERSION=%%V"
+)
+set "VERSION_OK=0"
+if defined EXE_VERSION (
+    if /i "!EXE_VERSION!"=="!APP_VERSION!" set "VERSION_OK=1"
+    if /i "!EXE_VERSION!"=="!APP_VERSION!.0" set "VERSION_OK=1"
+)
+if not defined EXE_VERSION (
+    echo [WARN] Could not read ProductVersion from %APP_NAME%.exe
+) else if "!VERSION_OK!"=="1" (
+    echo Version check OK : %APP_NAME%.exe = !APP_VERSION!
+) else (
+    echo [FAIL] Version mismatch: exe=!EXE_VERSION! cmake=!APP_VERSION!
+    goto fail
+)
+
 echo.
 echo [4/4] Create zip ...
 if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%"
@@ -145,8 +196,9 @@ if errorlevel 1 (
 echo.
 echo ========================================
 echo   Pack OK
-echo   Folder : %DIST_DIR%
-echo   Zip    : %ZIP_PATH%
+echo   Version : %APP_VERSION%
+echo   Folder  : %DIST_DIR%
+echo   Zip     : %ZIP_PATH%
 echo ========================================
 echo.
 if /i not "%PACK_NOPAUSE%"=="1" explorer.exe "%DIST_DIR%"

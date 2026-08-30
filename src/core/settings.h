@@ -1,6 +1,7 @@
 #ifndef SETTINGS_H
 #define SETTINGS_H
 
+#include <QByteArray>
 #include <QKeySequence>
 #include <QObject>
 #include <QPoint>
@@ -52,6 +53,9 @@ public:
     bool windowMaximized() const;
     void setWindowMaximized(bool maximized);
 
+    QByteArray windowGeometry() const;
+    void setWindowGeometry(const QByteArray &geometry);
+
     bool sectionExpanded(const QString &id, bool fallback = true) const;
     void setSectionExpanded(const QString &id, bool expanded);
 
@@ -81,6 +85,8 @@ public:
     void setPauseHotkey(const QKeySequence &seq);
 
     static QString defaultOutputDirectory();
+
+    void sync();
 
 private:
     QKeySequence keySequence(const QString &key, const QKeySequence &fallback) const;
