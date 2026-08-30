@@ -8,6 +8,7 @@
 class QAudioSource;
 class QIODevice;
 class QThread;
+class QTimer;
 
 class SystemAudioCapture : public QObject
 {
@@ -35,13 +36,18 @@ private:
     bool startMicrophone(QString *warning);
     QByteArray mix(const QByteArray &systemPcm, const QByteArray &micPcm) const;
     QByteArray consumeMic(int byteCount);
+    QByteArray takeSystem(int byteCount);
+    void onMixTick();
+    void capRemainder(QByteArray *buffer);
 
     QThread *m_thread = nullptr;
+    QTimer *m_mixTimer = nullptr;
     QAudioSource *m_mic = nullptr;
     QIODevice *m_micIo = nullptr;
     QAudioFormat m_micFormat;
     QByteArray m_micNativeRemainder;
     QByteArray m_micRemainder;
+    QByteArray m_systemRemainder;
     bool m_running = false;
     bool m_includeMic = false;
 };

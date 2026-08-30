@@ -97,7 +97,8 @@ void AppSettings::setCountdownSeconds(int seconds)
 
 int AppSettings::captureMode() const
 {
-    return m_settings.value(QStringLiteral("captureMode"), 0).toInt();
+    const int mode = m_settings.value(QStringLiteral("captureMode"), 0).toInt();
+    return (mode == 1) ? 1 : 0;
 }
 
 void AppSettings::setCaptureMode(int mode)
@@ -145,14 +146,34 @@ void AppSettings::setSectionExpanded(const QString &id, bool expanded)
     m_settings.setValue(QStringLiteral("fold/%1").arg(id), expanded);
 }
 
-QString AppSettings::lastWindowDescription() const
+QPoint AppSettings::floatingBarPos() const
 {
-    return m_settings.value(QStringLiteral("lastWindowDescription")).toString();
+    return m_settings.value(QStringLiteral("floatingBarPos"), QPoint(-1, -1)).toPoint();
 }
 
-void AppSettings::setLastWindowDescription(const QString &description)
+void AppSettings::setFloatingBarPos(const QPoint &pos)
 {
-    m_settings.setValue(QStringLiteral("lastWindowDescription"), description);
+    m_settings.setValue(QStringLiteral("floatingBarPos"), pos);
+}
+
+QString AppSettings::lastSavedPath() const
+{
+    return m_settings.value(QStringLiteral("lastSavedPath")).toString();
+}
+
+void AppSettings::setLastSavedPath(const QString &path)
+{
+    m_settings.setValue(QStringLiteral("lastSavedPath"), path);
+}
+
+qint64 AppSettings::lastDurationMs() const
+{
+    return m_settings.value(QStringLiteral("lastDurationMs"), 0).toLongLong();
+}
+
+void AppSettings::setLastDurationMs(qint64 ms)
+{
+    m_settings.setValue(QStringLiteral("lastDurationMs"), ms);
 }
 
 bool AppSettings::hotkeysEnabled() const
@@ -178,9 +199,24 @@ void AppSettings::setKeySequence(const QString &key, const QKeySequence &seq)
     m_settings.setValue(key, seq.toString(QKeySequence::PortableText));
 }
 
+QKeySequence AppSettings::defaultStartHotkey()
+{
+    return QKeySequence(QStringLiteral("Ctrl+Shift+R"));
+}
+
+QKeySequence AppSettings::defaultStopHotkey()
+{
+    return QKeySequence(QStringLiteral("Ctrl+Shift+S"));
+}
+
+QKeySequence AppSettings::defaultPauseHotkey()
+{
+    return QKeySequence(QStringLiteral("Ctrl+Shift+P"));
+}
+
 QKeySequence AppSettings::startHotkey() const
 {
-    return keySequence(QStringLiteral("startHotkey"), QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+    return keySequence(QStringLiteral("startHotkey"), defaultStartHotkey());
 }
 
 void AppSettings::setStartHotkey(const QKeySequence &seq)
@@ -190,7 +226,7 @@ void AppSettings::setStartHotkey(const QKeySequence &seq)
 
 QKeySequence AppSettings::stopHotkey() const
 {
-    return keySequence(QStringLiteral("stopHotkey"), QKeySequence(QStringLiteral("Ctrl+Shift+S")));
+    return keySequence(QStringLiteral("stopHotkey"), defaultStopHotkey());
 }
 
 void AppSettings::setStopHotkey(const QKeySequence &seq)
@@ -200,7 +236,7 @@ void AppSettings::setStopHotkey(const QKeySequence &seq)
 
 QKeySequence AppSettings::pauseHotkey() const
 {
-    return keySequence(QStringLiteral("pauseHotkey"), QKeySequence(QStringLiteral("Ctrl+Shift+P")));
+    return keySequence(QStringLiteral("pauseHotkey"), defaultPauseHotkey());
 }
 
 void AppSettings::setPauseHotkey(const QKeySequence &seq)

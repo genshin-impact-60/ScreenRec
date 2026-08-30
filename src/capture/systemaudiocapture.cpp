@@ -7,6 +7,7 @@
 #include <QMetaObject>
 #include <QMutex>
 #include <QThread>
+#include <QTimer>
 #include <QWaitCondition>
 #include <atomic>
 #include <vector>
@@ -28,6 +29,9 @@
 #endif
 #ifndef AUDCLNT_STREAMFLAGS_EVENTCALLBACK
 #    define AUDCLNT_STREAMFLAGS_EVENTCALLBACK 0x00040000
+#endif
+#ifndef AUDCLNT_STREAMFLAGS_NOPERSIST
+#    define AUDCLNT_STREAMFLAGS_NOPERSIST 0x00080000
 #endif
 
 namespace {
@@ -251,11 +255,19 @@ protected:
             return;
         }
 
-        IAudioClient *client = nullptr;
-        hr = device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr,
-                              reinterpret_cast<void **>(&client));
-        device->Release();
-        if (FAILED(hr) || !client) {
+        const auto activateClient = [device]() -> IAudioClient * {
+            IAudioClient *client = nullptr;
+            const HRESULT activateHr =
+                device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr,
+                                 reinterpret_cast<void **>(&client));
+            if (FAILED(activateHr))
+                return nullptr;
+            return client;
+        };
+
+        IAudioClient *client = activateClient();
+        if (!client) {
+            device->Release();
             finishInit(false, QStringLiteral("无法激活音频客户端。"));
             return;
         }
@@ -264,36 +276,22 @@ protected:
         hr = client->GetMixFormat(&mix);
         if (FAILED(hr) || !mix) {
             client->Release();
+            device->Release();
             finishInit(false, QStringLiteral("无法读取播放设备格式。"));
             return;
         }
 
         const REFERENCE_TIME bufferDuration = 2000000;
-        bool eventMode = true;
-        HANDLE eventHandle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED,
-                                AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+        // Endpoint loopback does not reliably fire EVENTCALLBACK unless something
+        // is already playing. Capture in timer/render-event mode instead.
+        hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
                                 bufferDuration, 0, mix, nullptr);
-        if (FAILED(hr)) {
-            eventMode = false;
-            if (eventHandle) {
-                CloseHandle(eventHandle);
-                eventHandle = nullptr;
-            }
-            hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-                                    bufferDuration, 0, mix, nullptr);
-        }
         if (FAILED(hr)) {
             CoTaskMemFree(mix);
             client->Release();
+            device->Release();
             finishInit(false, QStringLiteral("无法以 loopback 方式打开播放设备。"));
             return;
-        }
-
-        if (eventMode) {
-            hr = client->SetEventHandle(eventHandle);
-            if (FAILED(hr))
-                eventMode = false;
         }
 
         IAudioCaptureClient *capture = nullptr;
@@ -301,19 +299,94 @@ protected:
         if (FAILED(hr) || !capture) {
             CoTaskMemFree(mix);
             client->Release();
-            if (eventHandle)
-                CloseHandle(eventHandle);
+            device->Release();
             finishInit(false, QStringLiteral("无法创建 loopback 采集服务。"));
             return;
         }
 
+        IAudioClient *renderClient = activateClient();
+        IAudioRenderClient *render = nullptr;
+        WAVEFORMATEX *renderMix = nullptr;
+        HANDLE renderEvent = nullptr;
+        UINT32 renderBufferFrames = 0;
+        bool renderEventMode = false;
+        if (renderClient) {
+            hr = renderClient->GetMixFormat(&renderMix);
+            if (SUCCEEDED(hr) && renderMix) {
+                renderEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                hr = renderClient->Initialize(
+                    AUDCLNT_SHAREMODE_SHARED,
+                    AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_NOPERSIST,
+                    bufferDuration, 0, renderMix, nullptr);
+                if (FAILED(hr)) {
+                    renderClient->Release();
+                    renderClient = activateClient();
+                    if (renderEvent) {
+                        CloseHandle(renderEvent);
+                        renderEvent = nullptr;
+                    }
+                    if (renderClient) {
+                        hr = renderClient->Initialize(AUDCLNT_SHAREMODE_SHARED,
+                                                      AUDCLNT_STREAMFLAGS_NOPERSIST,
+                                                      bufferDuration, 0, renderMix, nullptr);
+                    }
+                } else {
+                    renderEventMode = SUCCEEDED(renderClient->SetEventHandle(renderEvent));
+                    if (!renderEventMode && renderEvent) {
+                        CloseHandle(renderEvent);
+                        renderEvent = nullptr;
+                    }
+                }
+            }
+            if (renderClient && SUCCEEDED(hr)) {
+                hr = renderClient->GetService(IID_IAudioRenderClient,
+                                              reinterpret_cast<void **>(&render));
+                if (SUCCEEDED(hr) && render)
+                    renderClient->GetBufferSize(&renderBufferFrames);
+            }
+            if (!render && renderClient) {
+                renderClient->Release();
+                renderClient = nullptr;
+            }
+        }
+        device->Release();
+
+        const auto feedSilence = [&]() {
+            if (!render || !renderClient || renderBufferFrames == 0)
+                return;
+            UINT32 padding = 0;
+            if (FAILED(renderClient->GetCurrentPadding(&padding)))
+                return;
+            const UINT32 frames = renderBufferFrames - padding;
+            if (frames == 0)
+                return;
+            BYTE *data = nullptr;
+            if (SUCCEEDED(render->GetBuffer(frames, &data)))
+                render->ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT);
+        };
+
+        if (render && renderBufferFrames > 0) {
+            BYTE *data = nullptr;
+            if (SUCCEEDED(render->GetBuffer(renderBufferFrames, &data)))
+                render->ReleaseBuffer(renderBufferFrames, AUDCLNT_BUFFERFLAGS_SILENT);
+            renderClient->Start();
+        }
+
         hr = client->Start();
         if (FAILED(hr)) {
+            if (renderClient)
+                renderClient->Stop();
+            if (render)
+                render->Release();
+            if (renderClient)
+                renderClient->Release();
+            if (renderMix)
+                CoTaskMemFree(renderMix);
+            if (renderEvent)
+                CloseHandle(renderEvent);
             capture->Release();
             CoTaskMemFree(mix);
             client->Release();
-            if (eventHandle)
-                CloseHandle(eventHandle);
             finishInit(false, QStringLiteral("无法开始系统内录。"));
             return;
         }
@@ -325,10 +398,10 @@ protected:
         const int srcRate = int(mix->nSamplesPerSec);
 
         while (!m_stop) {
-            if (eventMode && eventHandle) {
-                HANDLE handles[2] = {eventHandle, m_stopEvent};
+            if (renderEventMode && renderEvent) {
+                HANDLE handles[2] = {renderEvent, m_stopEvent};
                 const DWORD count = m_stopEvent ? 2 : 1;
-                WaitForMultipleObjects(count, handles, FALSE, 100);
+                WaitForMultipleObjects(count, handles, FALSE, 20);
             } else if (m_stopEvent) {
                 WaitForSingleObject(m_stopEvent, 10);
             } else {
@@ -336,6 +409,8 @@ protected:
             }
             if (m_stop)
                 break;
+
+            feedSilence();
 
             UINT32 packetFrames = 0;
             hr = capture->GetNextPacketSize(&packetFrames);
@@ -370,11 +445,19 @@ protected:
         }
 
         client->Stop();
+        if (renderClient)
+            renderClient->Stop();
         capture->Release();
+        if (render)
+            render->Release();
+        if (renderClient)
+            renderClient->Release();
+        if (renderMix)
+            CoTaskMemFree(renderMix);
         CoTaskMemFree(mix);
         client->Release();
-        if (eventHandle)
-            CloseHandle(eventHandle);
+        if (renderEvent)
+            CloseHandle(renderEvent);
     }
 
 private:
@@ -387,7 +470,10 @@ private:
 
 SystemAudioCapture::SystemAudioCapture(QObject *parent)
     : QObject(parent)
+    , m_mixTimer(new QTimer(this))
 {
+    m_mixTimer->setInterval(20);
+    connect(m_mixTimer, &QTimer::timeout, this, &SystemAudioCapture::onMixTick);
 }
 
 SystemAudioCapture::~SystemAudioCapture()
@@ -438,12 +524,16 @@ bool SystemAudioCapture::start(bool includeMicrophone, QString *error, QString *
         if (!startMicrophone(&micWarning) && warning)
             *warning = micWarning;
     }
+    m_mixTimer->start();
+    onMixTick();
     return true;
 #endif
 }
 
 void SystemAudioCapture::stop()
 {
+    if (m_mixTimer)
+        m_mixTimer->stop();
 #ifdef Q_OS_WIN
     if (auto *thread = static_cast<LoopbackThread *>(m_thread)) {
         thread->requestStop();
@@ -464,6 +554,7 @@ void SystemAudioCapture::stop()
     }
     m_micNativeRemainder.clear();
     m_micRemainder.clear();
+    m_systemRemainder.clear();
     m_running = false;
 }
 
@@ -533,20 +624,53 @@ QByteArray SystemAudioCapture::consumeMic(int byteCount)
         m_micRemainder.clear();
     }
 
-    const int maxQueued = mixFormat().bytesForDuration(500000);
-    if (m_micRemainder.size() > maxQueued)
-        m_micRemainder.remove(0, m_micRemainder.size() - maxQueued);
+    capRemainder(&m_micRemainder);
     return chunk;
+}
+
+void SystemAudioCapture::capRemainder(QByteArray *buffer)
+{
+    const int maxQueued = mixFormat().bytesForDuration(400000);
+    if (buffer->size() > maxQueued)
+        buffer->remove(0, buffer->size() - maxQueued);
+}
+
+QByteArray SystemAudioCapture::takeSystem(int byteCount)
+{
+    QByteArray chunk;
+    if (byteCount <= 0)
+        return chunk;
+    if (m_systemRemainder.size() >= byteCount) {
+        chunk = m_systemRemainder.left(byteCount);
+        m_systemRemainder.remove(0, byteCount);
+    } else {
+        chunk = m_systemRemainder;
+        m_systemRemainder.clear();
+        chunk.resize(byteCount);
+    }
+    return chunk;
+}
+
+void SystemAudioCapture::onMixTick()
+{
+    if (!m_running)
+        return;
+    const int byteCount = mixFormat().bytesForDuration(20000);
+    if (byteCount <= 0)
+        return;
+    const QByteArray systemPcm = takeSystem(byteCount);
+    if (m_includeMic && m_micIo)
+        emit pcmReady(mix(systemPcm, consumeMic(byteCount)));
+    else
+        emit pcmReady(systemPcm);
 }
 
 void SystemAudioCapture::onLoopbackPcm(const QByteArray &systemPcm)
 {
     if (!m_running || systemPcm.isEmpty())
         return;
-    if (m_includeMic && m_micIo)
-        emit pcmReady(mix(systemPcm, consumeMic(systemPcm.size())));
-    else
-        emit pcmReady(systemPcm);
+    m_systemRemainder.append(systemPcm);
+    capRemainder(&m_systemRemainder);
 }
 
 void SystemAudioCapture::onLoopbackFailed(const QString &message)

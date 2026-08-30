@@ -21,11 +21,13 @@ public:
 signals:
     void pauseClicked();
     void stopClicked();
+    void positionChanged(const QPoint &pos);
 
 protected:
     void showEvent(QShowEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
     RecDot *m_dot = nullptr;
@@ -33,6 +35,7 @@ private:
     QPushButton *m_pauseButton = nullptr;
     QPushButton *m_stopButton = nullptr;
     QPoint m_dragOffset;
+    bool m_dragging = false;
 };
 
 #endif

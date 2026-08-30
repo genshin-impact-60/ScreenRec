@@ -22,8 +22,6 @@
 #include <QVideoFrame>
 #include <QVideoFrameInput>
 #include <QVideoSink>
-#include <QWindowCapture>
-
 #if QT_CONFIG(permissions)
 #    include <QPermission>
 #endif
@@ -78,9 +76,8 @@ RecordingController::RecordingController(QObject *parent)
     , m_session(new QMediaCaptureSession(this))
     , m_encodeSession(new QMediaCaptureSession(this))
     , m_source(new ScreenCaptureSource(this))
-    , m_windowCapture(new QWindowCapture(this))
     , m_audioInput(new QAudioInput(this))
-    , m_audioBufferInput(new QAudioBufferInput(SystemAudioCapture::mixFormat(), this))
+    , m_audioBufferInput(new QAudioBufferInput(this))
     , m_systemAudio(new SystemAudioCapture(this))
     , m_recorder(new QMediaRecorder(this))
     , m_videoSink(new QVideoSink(this))
@@ -88,7 +85,6 @@ RecordingController::RecordingController(QObject *parent)
     , m_countdownTimer(new QTimer(this))
 {
     m_session->setScreenCapture(m_source->qtCapture());
-    m_session->setWindowCapture(m_windowCapture);
     m_session->setRecorder(m_recorder);
 
     m_countdownTimer->setInterval(1000);
@@ -106,19 +102,11 @@ RecordingController::RecordingController(QObject *parent)
                 fail(errorString.isEmpty() ? tr("录制失败。") : errorString);
             });
     connect(m_source, &ScreenCaptureSource::errorOccurred, this, &RecordingController::fail);
-    connect(m_windowCapture, &QWindowCapture::errorOccurred, this,
-            [this](QWindowCapture::Error error, const QString &errorString) {
-                if (error == QWindowCapture::NoError)
-                    return;
-                if (error == QWindowCapture::NotFound)
-                    fail(tr("目标窗口已关闭，录制已停止。"));
-                else
-                    fail(errorString.isEmpty() ? tr("窗口采集失败。") : errorString);
-            },
-            Qt::QueuedConnection);
     connect(m_videoSink, &QVideoSink::videoFrameChanged, this, &RecordingController::onVideoFrame);
     connect(m_systemAudio, &SystemAudioCapture::pcmReady, this, &RecordingController::onSystemPcm);
     connect(m_systemAudio, &SystemAudioCapture::failed, this, &RecordingController::warningOccurred);
+    connect(m_audioBufferInput, &QAudioBufferInput::readyToSendAudioBuffer, this,
+            &RecordingController::pumpAudio);
     connect(m_countdownTimer, &QTimer::timeout, this, &RecordingController::onCountdownTimeout);
 
     connect(qGuiApp, &QGuiApplication::screenRemoved, this, [this](QScreen *screen) {
@@ -126,8 +114,6 @@ RecordingController::RecordingController(QObject *parent)
             return;
         m_request.screen = nullptr;
         if (m_state == State::Idle || m_state == State::Stopping)
-            return;
-        if (m_request.mode == CaptureMode::Window)
             return;
         fail(tr("目标显示器已断开，录制已停止。"));
     });
@@ -149,13 +135,11 @@ void RecordingController::start(const Request &request)
         return;
 
     m_request = request;
-    if (m_request.mode != CaptureMode::Window) {
-        if (!m_request.screen)
-            m_request.screen = QGuiApplication::primaryScreen();
-        if (!m_request.screen) {
-            emit errorOccurred(tr("没有可用的显示器。"));
-            return;
-        }
+    if (!m_request.screen)
+        m_request.screen = QGuiApplication::primaryScreen();
+    if (!m_request.screen) {
+        emit errorOccurred(tr("没有可用的显示器。"));
+        return;
     }
     if (m_request.mode == CaptureMode::Region) {
         const QRect region = m_request.region.normalized();
@@ -164,10 +148,6 @@ void RecordingController::start(const Request &request)
             return;
         }
         m_request.region = region;
-    }
-    if (m_request.mode == CaptureMode::Window && !m_request.window.isValid()) {
-        emit errorOccurred(tr("请选择要录制的窗口。"));
-        return;
     }
     if (m_request.outputDirectory.trimmed().isEmpty()) {
         emit errorOccurred(tr("请选择保存目录。"));
@@ -219,6 +199,7 @@ void RecordingController::pause()
 {
     if (m_state != State::Recording)
         return;
+    m_pendingAudio.clear();
     m_recorder->pause();
 }
 
@@ -250,6 +231,16 @@ void RecordingController::cancelCountdown()
     m_countdownTimer->stop();
     m_countdownRemaining = 0;
     setState(State::Idle);
+}
+
+void RecordingController::skipCountdown()
+{
+    if (m_state != State::Countdown)
+        return;
+    m_countdownTimer->stop();
+    m_countdownRemaining = 0;
+    emit countdownTick(0);
+    beginCapture();
 }
 
 void RecordingController::setState(State state)
@@ -302,7 +293,6 @@ void RecordingController::beginCapture()
     }
 
     m_source->stop();
-    m_windowCapture->stop();
     m_session->setVideoSink(nullptr);
     m_encodeSession->setVideoFrameInput(nullptr);
     m_session->setRecorder(nullptr);
@@ -311,6 +301,7 @@ void RecordingController::beginCapture()
     const bool region = m_request.mode == CaptureMode::Region;
     m_processFrames = region;
     QMediaCaptureSession *recordSession = m_processFrames ? m_encodeSession : m_session;
+    m_pendingAudio.clear();
     const bool audioConnected = applyAudio(recordSession);
 
     const QMediaFormat format = chooseFormat(audioConnected);
@@ -329,7 +320,6 @@ void RecordingController::beginCapture()
 
     m_actualPath.clear();
     m_lastVideoUs = -1;
-    m_audioUs = -1;
     m_videoClock.restart();
     m_recorder->setOutputLocation(QUrl::fromLocalFile(m_pendingPath));
     recordSession->setRecorder(m_recorder);
@@ -339,24 +329,20 @@ void RecordingController::beginCapture()
         m_encodeSession->setVideoFrameInput(m_frameInput);
     }
 
-    if (m_request.mode == CaptureMode::Window) {
-        m_windowCapture->setWindow(m_request.window);
-        m_windowCapture->start();
-    } else {
-        m_source->setScreen(m_request.screen);
-        if (region) {
-            const qreal dpr = m_request.screen->devicePixelRatio();
-            const QRect logical = m_request.region.normalized();
-            m_physicalCrop = evenRect(QRect(qRound(logical.x() * dpr), qRound(logical.y() * dpr),
-                                            qRound(logical.width() * dpr),
-                                            qRound(logical.height() * dpr)));
-            m_recorder->setVideoResolution(fitOutputSize(m_physicalCrop.size()));
-        }
-        m_source->start();
+    m_source->setScreen(m_request.screen);
+    if (region) {
+        const qreal dpr = m_request.screen->devicePixelRatio();
+        const QRect logical = m_request.region.normalized();
+        m_physicalCrop = evenRect(QRect(qRound(logical.x() * dpr), qRound(logical.y() * dpr),
+                                        qRound(logical.width() * dpr),
+                                        qRound(logical.height() * dpr)));
+        m_recorder->setVideoResolution(fitOutputSize(m_physicalCrop.size()));
     }
+    m_source->start();
 
     setState(State::Recording);
     m_recorder->record();
+    pumpAudio();
 }
 
 bool RecordingController::prepareOutputPath(QString *error)
@@ -381,8 +367,8 @@ bool RecordingController::prepareOutputPath(QString *error)
 void RecordingController::cleanupCapture()
 {
     m_source->stop();
-    m_windowCapture->stop();
     m_systemAudio->stop();
+    m_pendingAudio.clear();
     m_session->setVideoSink(nullptr);
     m_encodeSession->setVideoFrameInput(nullptr);
     m_session->setAudioInput(nullptr);
@@ -416,8 +402,10 @@ void RecordingController::onRecorderStateChanged()
     case QMediaRecorder::RecordingState:
         if (m_state != State::Recording)
             setState(State::Recording);
+        pumpAudio();
         break;
     case QMediaRecorder::PausedState:
+        m_pendingAudio.clear();
         if (m_state != State::Paused)
             setState(State::Paused);
         break;
@@ -485,14 +473,35 @@ QSize RecordingController::fitOutputSize(QSize source) const
 
 void RecordingController::onSystemPcm(const QByteArray &pcm)
 {
-    if (m_state != State::Recording || pcm.isEmpty())
+    if (pcm.isEmpty())
+        return;
+    if (m_state == State::Paused || m_state == State::Stopping)
+        return;
+    m_pendingAudio.append(pcm);
+    const int maxBytes = SystemAudioCapture::mixFormat().bytesForDuration(1000000);
+    if (m_pendingAudio.size() > maxBytes)
+        m_pendingAudio.remove(0, m_pendingAudio.size() - maxBytes);
+    pumpAudio();
+}
+
+void RecordingController::pumpAudio()
+{
+    if (m_recorder->recorderState() != QMediaRecorder::RecordingState)
         return;
     const QAudioFormat format = SystemAudioCapture::mixFormat();
-    if (m_audioUs < 0)
-        m_audioUs = 0;
-    const QAudioBuffer buffer(pcm, format, m_audioUs);
-    m_audioUs += format.durationForBytes(pcm.size());
-    m_audioBufferInput->sendAudioBuffer(buffer);
+    const int bpf = format.bytesPerFrame();
+    if (bpf <= 0)
+        return;
+    const int chunk = qMax(bpf, format.bytesForDuration(20000));
+    while (m_pendingAudio.size() >= bpf) {
+        const int sendSize = qMin(chunk, m_pendingAudio.size() / bpf * bpf);
+        if (sendSize <= 0)
+            break;
+        const QAudioBuffer buffer(m_pendingAudio.left(sendSize), format, -1);
+        if (!m_audioBufferInput->sendAudioBuffer(buffer))
+            break;
+        m_pendingAudio.remove(0, sendSize);
+    }
 }
 
 void RecordingController::onVideoFrame(const QVideoFrame &frame)

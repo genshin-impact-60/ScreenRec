@@ -23,6 +23,8 @@ QIcon speaker(const QColor &color = QColor(QStringLiteral("#1B2838")));
 QIcon settings(const QColor &color = QColor(QStringLiteral("#1B2838")));
 QIcon back(const QColor &color = QColor(QStringLiteral("#1B2838")));
 QIcon folder(const QColor &color = QColor(QStringLiteral("#1B2838")));
+QIcon screen(const QColor &color = QColor(QStringLiteral("#1B2838")));
+QIcon region(const QColor &color = QColor(QStringLiteral("#1B2838")));
 QIcon chevronDown(const QColor &color = QColor(QStringLiteral("#6B7280")));
 QIcon chevronRight(const QColor &color = QColor(QStringLiteral("#6B7280")));
 }

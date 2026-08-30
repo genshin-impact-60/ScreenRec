@@ -29,7 +29,8 @@ RegionSelector::RegionSelector(QWidget *parent)
     m_toolbar->setAttribute(Qt::WA_StyledBackground, true);
     auto *layout = new QHBoxLayout(m_toolbar);
     layout->setContentsMargins(10, 8, 10, 8);
-    layout->setSpacing(8);
+    layout->setSpacing(6);
+
     m_okButton = new QPushButton(tr("确认"), m_toolbar);
     m_cancelButton = new QPushButton(tr("取消"), m_toolbar);
     m_okButton->setObjectName(QStringLiteral("okBtn"));
@@ -37,40 +38,71 @@ RegionSelector::RegionSelector(QWidget *parent)
     m_okButton->setCursor(Qt::PointingHandCursor);
     m_cancelButton->setCursor(Qt::PointingHandCursor);
     m_okButton->setDefault(true);
+
+    auto makePreset = [this](const QString &text) {
+        auto *button = new QPushButton(text, m_toolbar);
+        button->setObjectName(QStringLiteral("presetBtn"));
+        button->setCursor(Qt::PointingHandCursor);
+        button->setCheckable(true);
+        button->setAutoExclusive(true);
+        return button;
+    };
+    m_ratio169 = makePreset(QStringLiteral("16:9"));
+    m_ratio43 = makePreset(QStringLiteral("4:3"));
+    m_ratio11 = makePreset(QStringLiteral("1:1"));
+    m_size1080 = makePreset(QStringLiteral("1080p"));
+
     layout->addWidget(m_okButton);
     layout->addWidget(m_cancelButton);
+    layout->addSpacing(6);
+    layout->addWidget(m_ratio169);
+    layout->addWidget(m_ratio43);
+    layout->addWidget(m_ratio11);
+    layout->addWidget(m_size1080);
     m_toolbar->setStyleSheet(QStringLiteral(
         "#regionToolbar { background: rgba(22, 24, 28, 230); border-radius: 12px; }"
-        "QPushButton { border: none; min-height: 30px; padding: 4px 16px;"
+        "QPushButton { border: none; min-height: 30px; padding: 4px 12px;"
         " border-radius: 8px; font-weight: 600; }"
         "QPushButton#okBtn { background: #E11D2E; color: white; }"
         "QPushButton#okBtn:hover { background: #C91828; }"
         "QPushButton#cancelBtn { background: #3A3D44; color: white; }"
-        "QPushButton#cancelBtn:hover { background: #4A4E56; }"));
+        "QPushButton#cancelBtn:hover { background: #4A4E56; }"
+        "QPushButton#presetBtn { background: #2C2F36; color: #E8EAED; }"
+        "QPushButton#presetBtn:hover { background: #3A3D44; }"
+        "QPushButton#presetBtn:checked { background: #FDECEE; color: #E11D2E; }"));
     m_toolbar->adjustSize();
     m_toolbar->hide();
 
     connect(m_okButton, &QPushButton::clicked, this, &RegionSelector::confirm);
     connect(m_cancelButton, &QPushButton::clicked, this, &RegionSelector::cancel);
+    connect(m_ratio169, &QPushButton::clicked, this, [this]() { applyRatio(16.0 / 9.0); });
+    connect(m_ratio43, &QPushButton::clicked, this, [this]() { applyRatio(4.0 / 3.0); });
+    connect(m_ratio11, &QPushButton::clicked, this, [this]() { applyRatio(1.0); });
+    connect(m_size1080, &QPushButton::clicked, this, [this]() { applyFixedSize(QSize(1920, 1080)); });
 }
 
-void RegionSelector::start(QScreen *screen)
+void RegionSelector::start(QScreen *screen, const QRect &initial)
 {
     if (!screen)
         screen = QGuiApplication::primaryScreen();
     if (!screen)
         return;
 
-    m_rect = QRect();
     m_dragging = false;
     m_activeHandle = Handle::None;
-    m_toolbar->hide();
+    m_lockRatio = 0;
+    for (auto *button : {m_ratio169, m_ratio43, m_ratio11, m_size1080})
+        button->setChecked(false);
+
     setGeometry(screen->geometry());
+    const QRect bounds(QPoint(0, 0), size());
+    m_rect = initial.isValid() ? initial.intersected(bounds) : QRect();
     show();
     raise();
     activateWindow();
     setFocus(Qt::ActiveWindowFocusReason);
     grabKeyboard();
+    updateToolbar();
 }
 
 void RegionSelector::dismiss()
@@ -95,7 +127,7 @@ void RegionSelector::paintEvent(QPaintEvent *)
 
     if (r.width() < 2 || r.height() < 2) {
         p.fillRect(full, mask);
-        const QString hint = tr("拖拽选择区域    Enter 确认    Esc 取消");
+        const QString hint = tr("拖拽选择区域    16:9 / 1080p 预设    Enter 确认    Esc 取消");
         QFont hintFont = p.font();
         hintFont.setPixelSize(13);
         p.setFont(hintFont);
@@ -117,11 +149,11 @@ void RegionSelector::paintEvent(QPaintEvent *)
     p.fillRect(QRect(full.left(), r.top(), qMax(0, r.left() - full.left()), r.height()), mask);
     p.fillRect(QRect(r.right() + 1, r.top(), qMax(0, full.right() - r.right()), r.height()), mask);
 
-    p.setPen(QPen(QColor(77, 163, 255), 2));
+    p.setPen(QPen(QColor(QStringLiteral("#E11D2E")), 2));
     p.setBrush(Qt::NoBrush);
     p.drawRect(r.adjusted(0, 0, -1, -1));
 
-    p.setBrush(QColor(77, 163, 255));
+    p.setBrush(QColor(QStringLiteral("#E11D2E")));
     p.setPen(QPen(Qt::white, 1));
     const Handle handles[] = {Handle::Left,       Handle::Right,      Handle::Top,
                               Handle::Bottom,     Handle::TopLeft,    Handle::TopRight,
@@ -129,7 +161,11 @@ void RegionSelector::paintEvent(QPaintEvent *)
     for (Handle h : handles)
         p.drawEllipse(handleRect(h));
 
-    const QString label = QStringLiteral("%1 × %2").arg(r.width()).arg(r.height());
+    const QString label = QStringLiteral("%1 × %2  ·  (%3, %4)")
+                              .arg(r.width())
+                              .arg(r.height())
+                              .arg(r.x())
+                              .arg(r.y());
     QFont badgeFont = p.font();
     badgeFont.setPixelSize(12);
     badgeFont.setBold(true);
@@ -161,6 +197,9 @@ void RegionSelector::mousePressEvent(QMouseEvent *event)
         m_rect = QRect(pos, pos);
         m_activeHandle = Handle::BottomRight;
         m_dragging = true;
+        m_lockRatio = 0;
+        for (auto *button : {m_ratio169, m_ratio43, m_ratio11, m_size1080})
+            button->setChecked(false);
         m_toolbar->hide();
         setCursor(Qt::CrossCursor);
     } else {
@@ -214,6 +253,8 @@ void RegionSelector::mouseMoveEvent(QMouseEvent *event)
     }
 
     r = r.normalized();
+    if (m_lockRatio > 0 && m_activeHandle != Handle::Body && m_activeHandle != Handle::None)
+        r = fitRatio(r, m_lockRatio);
     if (r.width() < kMinSize)
         r.setWidth(kMinSize);
     if (r.height() < kMinSize)
@@ -355,6 +396,58 @@ void RegionSelector::updateToolbar()
     m_toolbar->move(pos);
     m_toolbar->show();
     m_toolbar->raise();
+}
+
+void RegionSelector::applyRatio(qreal ratio)
+{
+    setLockedRatio(ratio);
+    QRect r = normalizedRect();
+    if (r.width() < kMinSize || r.height() < kMinSize) {
+        const int w = qMin(width() * 3 / 5, qRound(height() * 3 / 5 * ratio));
+        const int h = qRound(w / ratio);
+        r = QRect((width() - w) / 2, (height() - h) / 2, w, h);
+    }
+    m_rect = fitRatio(r, ratio).intersected(rect());
+    updateToolbar();
+    update();
+}
+
+void RegionSelector::applyFixedSize(QSize wanted)
+{
+    setLockedRatio(wanted.width() / qreal(qMax(1, wanted.height())));
+    const QSize maxSize(qMax(kMinSize, width() - 16), qMax(kMinSize, height() - 16));
+    if (wanted.width() > maxSize.width() || wanted.height() > maxSize.height())
+        wanted.scale(maxSize, Qt::KeepAspectRatio);
+    QRect r((width() - wanted.width()) / 2, (height() - wanted.height()) / 2, wanted.width(),
+            wanted.height());
+    const QRect current = normalizedRect();
+    if (current.width() >= kMinSize && current.height() >= kMinSize)
+        r.moveCenter(current.center());
+    m_rect = r.intersected(rect());
+    updateToolbar();
+    update();
+}
+
+void RegionSelector::setLockedRatio(qreal ratio)
+{
+    m_lockRatio = ratio;
+}
+
+QRect RegionSelector::fitRatio(QRect rect, qreal ratio) const
+{
+    rect = rect.normalized();
+    if (ratio <= 0)
+        return rect;
+    const QPoint center = rect.center();
+    int w = rect.width();
+    int h = qRound(w / ratio);
+    if (h < kMinSize) {
+        h = kMinSize;
+        w = qRound(h * ratio);
+    }
+    QRect fitted(0, 0, w, h);
+    fitted.moveCenter(center);
+    return fitted.intersected(this->rect());
 }
 
 void RegionSelector::confirm()

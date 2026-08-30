@@ -3,6 +3,7 @@
 
 #include <QKeySequence>
 #include <QObject>
+#include <QPoint>
 #include <QRect>
 #include <QSettings>
 #include <QSize>
@@ -54,10 +55,20 @@ public:
     bool sectionExpanded(const QString &id, bool fallback = true) const;
     void setSectionExpanded(const QString &id, bool expanded);
 
-    QString lastWindowDescription() const;
-    void setLastWindowDescription(const QString &description);
+    QPoint floatingBarPos() const;
+    void setFloatingBarPos(const QPoint &pos);
+
+    QString lastSavedPath() const;
+    void setLastSavedPath(const QString &path);
+
+    qint64 lastDurationMs() const;
+    void setLastDurationMs(qint64 ms);
 
     bool hotkeysEnabled() const;
+
+    static QKeySequence defaultStartHotkey();
+    static QKeySequence defaultStopHotkey();
+    static QKeySequence defaultPauseHotkey();
     void setHotkeysEnabled(bool enabled);
 
     QKeySequence startHotkey() const;

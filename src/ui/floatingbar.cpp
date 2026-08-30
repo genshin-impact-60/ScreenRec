@@ -21,6 +21,7 @@ public:
         : QWidget(parent)
     {
         setFixedSize(16, 16);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
         m_anim = new QVariantAnimation(this);
         m_anim->setStartValue(0.35);
         m_anim->setEndValue(1.0);
@@ -77,6 +78,32 @@ private:
     qreal m_pulse = 1.0;
 };
 
+class Grip : public QWidget
+{
+public:
+    explicit Grip(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setFixedSize(10, 22);
+        setCursor(Qt::SizeAllCursor);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(255, 255, 255, 90));
+        for (int col = 0; col < 2; ++col) {
+            for (int row = 0; row < 3; ++row) {
+                p.drawEllipse(QPointF(3 + col * 4, 5 + row * 6), 1.4, 1.4);
+            }
+        }
+    }
+};
+
 FloatingBar::FloatingBar(QWidget *parent)
     : QWidget(parent, Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::Tool)
 {
@@ -93,11 +120,13 @@ FloatingBar::FloatingBar(QWidget *parent)
     outer->addWidget(inner);
 
     auto *root = new QHBoxLayout(inner);
-    root->setContentsMargins(14, 8, 10, 8);
+    root->setContentsMargins(10, 8, 10, 8);
     root->setSpacing(10);
 
+    auto *grip = new Grip(inner);
     m_dot = new RecDot(inner);
-    m_duration = new QLabel(QStringLiteral("00:00:00"), inner);
+    m_duration = new QLabel(QStringLiteral("00:00"), inner);
+    m_duration->setAttribute(Qt::WA_TransparentForMouseEvents);
     QFont font = m_duration->font();
     font.setFamilies({QStringLiteral("Cascadia Mono"), QStringLiteral("Consolas"),
                       QStringLiteral("Segoe UI")});
@@ -116,6 +145,7 @@ FloatingBar::FloatingBar(QWidget *parent)
     m_pauseButton->setIconSize(QSize(12, 12));
     m_stopButton->setIconSize(QSize(12, 12));
 
+    root->addWidget(grip);
     root->addWidget(m_dot);
     root->addWidget(m_duration);
     root->addSpacing(6);
@@ -132,6 +162,7 @@ FloatingBar::FloatingBar(QWidget *parent)
         "QPushButton#stopBtn { background: #E11D2E; }"
         "QPushButton#stopBtn:hover { background: #C91828; }"));
 
+    inner->setCursor(Qt::SizeAllCursor);
     adjustSize();
 
     connect(m_pauseButton, &QPushButton::clicked, this, &FloatingBar::pauseClicked);
@@ -167,12 +198,22 @@ void FloatingBar::setRecordingUi(bool paused, bool countdown)
 
 void FloatingBar::mousePressEvent(QMouseEvent *event)
 {
-    if (event->button() == Qt::LeftButton)
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
         m_dragOffset = event->globalPosition().toPoint() - frameGeometry().topLeft();
+    }
 }
 
 void FloatingBar::mouseMoveEvent(QMouseEvent *event)
 {
-    if (event->buttons() & Qt::LeftButton)
+    if (m_dragging && (event->buttons() & Qt::LeftButton))
         move(event->globalPosition().toPoint() - m_dragOffset);
+}
+
+void FloatingBar::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_dragging) {
+        m_dragging = false;
+        emit positionChanged(pos());
+    }
 }

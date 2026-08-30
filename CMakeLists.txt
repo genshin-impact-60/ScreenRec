@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(ScreenRec VERSION 1.1.0 LANGUAGES CXX)
+project(ScreenRec VERSION 1.2.0 LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia)
 
@@ -30,6 +30,10 @@ qt_add_executable(ScreenRec
     src/ui/regionselector.h
     src/ui/floatingbar.cpp
     src/ui/floatingbar.h
+    src/ui/audiochip.cpp
+    src/ui/audiochip.h
+    src/capture/audiolevelmonitor.cpp
+    src/capture/audiolevelmonitor.h
     src/core/recordingcontroller.cpp
     src/core/recordingcontroller.h
     src/core/settings.cpp

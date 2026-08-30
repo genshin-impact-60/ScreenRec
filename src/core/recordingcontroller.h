@@ -1,7 +1,6 @@
 #ifndef RECORDINGCONTROLLER_H
 #define RECORDINGCONTROLLER_H
 
-#include <QCapturableWindow>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QRect>
@@ -17,7 +16,6 @@ class QTimer;
 class QVideoFrame;
 class QVideoFrameInput;
 class QVideoSink;
-class QWindowCapture;
 class ScreenCaptureSource;
 class SystemAudioCapture;
 
@@ -37,8 +35,7 @@ public:
 
     enum class CaptureMode {
         Screen,
-        Region,
-        Window
+        Region
     };
     Q_ENUM(CaptureMode)
 
@@ -46,7 +43,6 @@ public:
         CaptureMode mode = CaptureMode::Screen;
         QScreen *screen = nullptr;
         QRect region;
-        QCapturableWindow window;
         QString outputDirectory;
         bool recordMicrophone = false;
         bool recordSystemAudio = false;
@@ -70,6 +66,7 @@ public slots:
     void resume();
     void stop();
     void cancelCountdown();
+    void skipCountdown();
 
 signals:
     void stateChanged(RecordingController::State state);
@@ -89,6 +86,7 @@ private:
     void onCountdownTimeout();
     void onVideoFrame(const QVideoFrame &frame);
     void onSystemPcm(const QByteArray &pcm);
+    void pumpAudio();
     QRect mappedCropRect(const QSize &frameSize) const;
     bool applyAudio(QMediaCaptureSession *session);
     QSize fitOutputSize(QSize source) const;
@@ -101,13 +99,12 @@ private:
     bool m_processFrames = false;
     QRect m_physicalCrop;
     qint64 m_lastVideoUs = -1;
-    qint64 m_audioUs = -1;
     QElapsedTimer m_videoClock;
+    QByteArray m_pendingAudio;
 
     QMediaCaptureSession *m_session = nullptr;
     QMediaCaptureSession *m_encodeSession = nullptr;
     ScreenCaptureSource *m_source = nullptr;
-    QWindowCapture *m_windowCapture = nullptr;
     QAudioInput *m_audioInput = nullptr;
     QAudioBufferInput *m_audioBufferInput = nullptr;
     SystemAudioCapture *m_systemAudio = nullptr;

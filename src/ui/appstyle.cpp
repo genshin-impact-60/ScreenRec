@@ -226,13 +226,14 @@ QWidget#settingsCard {
   border-radius: 12px;
 }
 
-QWidget#foldHeader {
-  background: transparent;
-  border-radius: 12px;
+QWidget#settingsCard[headerHover="true"] {
+  background: #F7F8FA;
+  border: 1px solid #C9CDD4;
 }
 
-QWidget#foldHeader:hover {
-  background: #F7F8FA;
+QWidget#foldHeader {
+  background: transparent;
+  border: none;
 }
 
 QLabel#cardTitle {
@@ -314,6 +315,37 @@ QToolButton#iconButton:pressed {
   background: #DDE0E5;
 }
 
+QToolButton#previewIconButton {
+  border: none;
+  background: rgba(17, 19, 24, 150);
+  border-radius: 8px;
+  padding: 6px;
+}
+
+QToolButton#previewIconButton:hover {
+  background: rgba(255, 255, 255, 40);
+}
+
+QPushButton#summaryButton {
+  background: transparent;
+  color: #6B7280;
+  border: none;
+  border-radius: 8px;
+  padding: 4px 8px;
+  min-height: 24px;
+  font-size: 12px;
+}
+
+QPushButton#summaryButton:hover {
+  background: #ECEEF1;
+  color: #1B2838;
+}
+
+QLabel#errorLabel {
+  color: #C91828;
+  font-size: 12px;
+}
+
 QToolButton#segBtn {
   background: #FFFFFF;
   color: #1B2838;
@@ -329,9 +361,9 @@ QToolButton#segBtn:hover {
 }
 
 QToolButton#segBtn:checked {
-  background: #1B2838;
-  color: #FFFFFF;
-  border-color: #1B2838;
+  background: #FDECEE;
+  color: #E11D2E;
+  border-color: #E11D2E;
 }
 
 QToolButton#segBtn[pos="first"],
@@ -350,7 +382,7 @@ QCheckBox#chipCheck {
   background: #FFFFFF;
   border: 1px solid #E2E4E8;
   border-radius: 10px;
-  padding: 8px 12px 8px 10px;
+  padding: 8px 38px 8px 10px;
   spacing: 8px;
   min-height: 36px;
 }
@@ -362,6 +394,11 @@ QCheckBox#chipCheck:hover {
 QCheckBox#chipCheck:checked {
   background: #FDECEE;
   border-color: #E11D2E;
+}
+
+QCheckBox#chipCheck[silent="true"] {
+  background: #FFF8E8;
+  border-color: #E6A317;
 }
 
 QCheckBox#chipCheck::indicator {
@@ -616,5 +653,36 @@ QIcon AppIcons::folder(const QColor &color)
         path.lineTo(r.left(), r.bottom());
         path.closeSubpath();
         p.drawPath(path);
+    });
+}
+
+QIcon AppIcons::screen(const QColor &color)
+{
+    return paintIcon(color, [color](QPainter &p, const QRectF &r) {
+        const QRectF screen = r.adjusted(0, r.height() * 0.04, 0, -r.height() * 0.28);
+        p.drawRoundedRect(screen, 2.4, 2.4);
+        p.drawLine(QPointF(r.center().x(), screen.bottom()),
+                   QPointF(r.center().x(), r.bottom() - r.height() * 0.06));
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawRoundedRect(QRectF(r.center().x() - r.width() * 0.22,
+                                 r.bottom() - r.height() * 0.08,
+                                 r.width() * 0.44, r.height() * 0.08),
+                          1.2, 1.2);
+    });
+}
+
+QIcon AppIcons::region(const QColor &color)
+{
+    return paintIcon(color, [](QPainter &p, const QRectF &r) {
+        const qreal arm = r.width() * 0.34;
+        p.drawLine(r.topLeft(), QPointF(r.left() + arm, r.top()));
+        p.drawLine(r.topLeft(), QPointF(r.left(), r.top() + arm));
+        p.drawLine(r.topRight(), QPointF(r.right() - arm, r.top()));
+        p.drawLine(r.topRight(), QPointF(r.right(), r.top() + arm));
+        p.drawLine(r.bottomLeft(), QPointF(r.left() + arm, r.bottom()));
+        p.drawLine(r.bottomLeft(), QPointF(r.left(), r.bottom() - arm));
+        p.drawLine(r.bottomRight(), QPointF(r.right() - arm, r.bottom()));
+        p.drawLine(r.bottomRight(), QPointF(r.right(), r.bottom() - arm));
     });
 }
