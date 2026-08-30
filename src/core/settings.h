@@ -45,6 +45,15 @@ public:
     QRect region() const;
     void setRegion(const QRect &region);
 
+    QSize windowSize() const;
+    void setWindowSize(const QSize &size);
+
+    bool windowMaximized() const;
+    void setWindowMaximized(bool maximized);
+
+    bool sectionExpanded(const QString &id, bool fallback = true) const;
+    void setSectionExpanded(const QString &id, bool expanded);
+
     QString lastWindowDescription() const;
     void setLastWindowDescription(const QString &description);
 

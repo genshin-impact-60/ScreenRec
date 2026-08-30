@@ -115,6 +115,36 @@ void AppSettings::setRegion(const QRect &region)
     m_settings.setValue(QStringLiteral("region"), region);
 }
 
+QSize AppSettings::windowSize() const
+{
+    return m_settings.value(QStringLiteral("windowSize")).toSize();
+}
+
+void AppSettings::setWindowSize(const QSize &size)
+{
+    m_settings.setValue(QStringLiteral("windowSize"), size);
+}
+
+bool AppSettings::windowMaximized() const
+{
+    return m_settings.value(QStringLiteral("windowMaximized"), false).toBool();
+}
+
+void AppSettings::setWindowMaximized(bool maximized)
+{
+    m_settings.setValue(QStringLiteral("windowMaximized"), maximized);
+}
+
+bool AppSettings::sectionExpanded(const QString &id, bool fallback) const
+{
+    return m_settings.value(QStringLiteral("fold/%1").arg(id), fallback).toBool();
+}
+
+void AppSettings::setSectionExpanded(const QString &id, bool expanded)
+{
+    m_settings.setValue(QStringLiteral("fold/%1").arg(id), expanded);
+}
+
 QString AppSettings::lastWindowDescription() const
 {
     return m_settings.value(QStringLiteral("lastWindowDescription")).toString();

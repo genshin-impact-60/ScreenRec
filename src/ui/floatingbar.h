@@ -6,6 +6,7 @@
 class QLabel;
 class QPushButton;
 class QShowEvent;
+class RecDot;
 
 class FloatingBar : public QWidget
 {
@@ -27,7 +28,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
 
 private:
-    QLabel *m_dot = nullptr;
+    RecDot *m_dot = nullptr;
     QLabel *m_duration = nullptr;
     QPushButton *m_pauseButton = nullptr;
     QPushButton *m_stopButton = nullptr;

@@ -1,3 +1,4 @@
+#include "appstyle.h"
 #include "mainwindow.h"
 
 #include <QApplication>
@@ -14,6 +15,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("ScreenRec"));
     QApplication::setApplicationVersion(QStringLiteral(SCREENREC_VERSION));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/app.png")));
+    AppStyle::apply(app);
 
     MainWindow window;
     window.show();

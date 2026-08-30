@@ -23,6 +23,7 @@ protected:
 
 private:
     int m_remaining = 0;
+    int m_total = 0;
 };
 
 #endif

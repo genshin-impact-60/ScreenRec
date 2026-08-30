@@ -1,45 +1,54 @@
 #include "mainwindow.h"
+#include "appstyle.h"
 #include "captureexclude.h"
 #include "countdownoverlay.h"
 #include "floatingbar.h"
 #include "hotkeymanager.h"
+#include "previewwidget.h"
 #include "regionselector.h"
 #include "settings.h"
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCapturableWindow>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDesktopServices>
-#include <QEvent>
-#include <QHideEvent>
 #include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFormLayout>
-#include <QGroupBox>
+#include <QFrame>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QIcon>
+#include <QMouseEvent>
 #include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
-#include <QPixmap>
 #include <QPushButton>
 #include <QScreen>
-#include <QSize>
+#include <QScrollArea>
 #include <QShowEvent>
+#include <QSize>
+#include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyle>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindowCapture>
 #include <QMediaRecorder>
+
+#include <functional>
 
 namespace {
 
@@ -53,6 +62,119 @@ QString formatDuration(qint64 milliseconds)
         .arg(hours, 2, 10, QChar('0'))
         .arg(minutes, 2, 10, QChar('0'))
         .arg(seconds, 2, 10, QChar('0'));
+}
+
+void polishWidget(QWidget *widget)
+{
+    if (!widget || !widget->style())
+        return;
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
+}
+
+class SettingsFold : public QWidget
+{
+public:
+    explicit SettingsFold(const QString &title, QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setObjectName(QStringLiteral("settingsCard"));
+        setAttribute(Qt::WA_StyledBackground, true);
+
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(0, 0, 0, 0);
+        root->setSpacing(0);
+
+        m_header = new QWidget(this);
+        m_header->setObjectName(QStringLiteral("foldHeader"));
+        m_header->setAttribute(Qt::WA_StyledBackground, true);
+        m_header->setAttribute(Qt::WA_Hover, true);
+        m_header->setCursor(Qt::PointingHandCursor);
+        m_header->setToolTip(tr("点击展开或折叠"));
+        auto *headerLayout = new QHBoxLayout(m_header);
+        headerLayout->setContentsMargins(14, 12, 14, 12);
+        headerLayout->setSpacing(6);
+        auto *titleLabel = new QLabel(title, m_header);
+        titleLabel->setObjectName(QStringLiteral("cardTitle"));
+        titleLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        m_arrow = new QLabel(m_header);
+        m_arrow->setFixedSize(18, 18);
+        m_arrow->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        headerLayout->addWidget(titleLabel, 0, Qt::AlignVCenter);
+        headerLayout->addWidget(m_arrow, 0, Qt::AlignVCenter);
+        headerLayout->addStretch(1);
+
+        m_body = new QWidget(this);
+        m_bodyLayout = new QVBoxLayout(m_body);
+        m_bodyLayout->setContentsMargins(14, 2, 14, 14);
+        m_bodyLayout->setSpacing(10);
+
+        root->addWidget(m_header);
+        root->addWidget(m_body);
+        m_header->installEventFilter(this);
+        setExpanded(true);
+    }
+
+    QVBoxLayout *bodyLayout() { return m_bodyLayout; }
+
+    bool isExpanded() const { return m_expanded; }
+
+    void setExpanded(bool expanded)
+    {
+        m_expanded = expanded;
+        m_body->setVisible(expanded);
+        const QIcon icon = expanded ? AppIcons::chevronDown() : AppIcons::chevronRight();
+        m_arrow->setPixmap(icon.pixmap(18, 18));
+    }
+
+    void onToggled(std::function<void(bool)> callback) { m_onToggled = std::move(callback); }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched == m_header && event->type() == QEvent::MouseButtonRelease) {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                setExpanded(!m_expanded);
+                if (m_onToggled)
+                    m_onToggled(m_expanded);
+                return true;
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
+private:
+    QWidget *m_header = nullptr;
+    QLabel *m_arrow = nullptr;
+    QWidget *m_body = nullptr;
+    QVBoxLayout *m_bodyLayout = nullptr;
+    bool m_expanded = true;
+    std::function<void(bool)> m_onToggled;
+};
+
+void bindFold(SettingsFold *fold, AppSettings *settings, const QString &id)
+{
+    fold->setExpanded(settings->sectionExpanded(id, true));
+    fold->onToggled([settings, id](bool expanded) {
+        settings->setSectionExpanded(id, expanded);
+    });
+}
+
+void addSettingsField(QVBoxLayout *layout, QWidget *parent, const QString &text, QWidget *field)
+{
+    auto *row = new QWidget(parent);
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(12);
+    auto *label = new QLabel(text, row);
+    label->setObjectName(QStringLiteral("fieldLabel"));
+    label->setFixedWidth(56);
+    label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    rowLayout->addWidget(label);
+    rowLayout->addWidget(field, 1);
+    layout->addWidget(row);
 }
 
 } // namespace
@@ -75,6 +197,7 @@ MainWindow::MainWindow(QWidget *parent)
     refreshWindows();
     updateModeRows();
     updateRegionLabel();
+    updateHint();
     updateUi();
 
     m_previewTimer = new QTimer(this);
@@ -92,182 +215,277 @@ MainWindow::~MainWindow()
 
 void MainWindow::setupUi()
 {
-    setWindowTitle(QStringLiteral("ScreenRec  Ver %1").arg(QApplication::applicationVersion()));
-    resize(580, 620);
+    setWindowTitle(QStringLiteral("ScreenRec"));
+    resize(460, 640);
+    setMinimumSize(400, 560);
 
     auto *central = new QWidget(this);
+    central->setObjectName(QStringLiteral("centralRoot"));
     auto *root = new QVBoxLayout(central);
-    root->setContentsMargins(12, 12, 12, 12);
-    root->setSpacing(10);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
 
-    auto *formBox = new QGroupBox(tr("录制设置"), central);
-    m_form = new QFormLayout(formBox);
-    m_form->setContentsMargins(12, 12, 12, 12);
-    m_form->setSpacing(8);
+    m_stack = new QStackedWidget(central);
+    m_recorderPage = new QWidget;
+    m_recorderPage->setObjectName(QStringLiteral("page"));
+    m_settingsPage = new QWidget;
+    m_settingsPage->setObjectName(QStringLiteral("page"));
 
-    m_modeCombo = new QComboBox(formBox);
-    m_modeCombo->addItem(tr("整屏"), int(RecordingController::CaptureMode::Screen));
-    m_modeCombo->addItem(tr("区域"), int(RecordingController::CaptureMode::Region));
-    m_modeCombo->addItem(tr("窗口"), int(RecordingController::CaptureMode::Window));
-    m_form->addRow(tr("模式"), m_modeCombo);
+    setupRecorderPage();
+    setupSettingsPage();
 
-    m_screenCombo = new QComboBox(formBox);
-    m_form->addRow(tr("显示器"), m_screenCombo);
+    m_stack->addWidget(m_recorderPage);
+    m_stack->addWidget(m_settingsPage);
+    root->addWidget(m_stack);
+    setCentralWidget(central);
+    statusBar()->showMessage(tr("选择画面后点击开始录制"));
+}
 
-    m_regionRow = new QWidget(formBox);
+void MainWindow::setupRecorderPage()
+{
+    auto *layout = new QVBoxLayout(m_recorderPage);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+
+    auto *header = new QHBoxLayout;
+    header->setSpacing(8);
+    m_settingsButton = new QToolButton(m_recorderPage);
+    m_settingsButton->setObjectName(QStringLiteral("iconButton"));
+    m_settingsButton->setIcon(AppIcons::settings());
+    m_settingsButton->setIconSize(QSize(20, 20));
+    m_settingsButton->setCursor(Qt::PointingHandCursor);
+    m_settingsButton->setToolTip(tr("设置"));
+    header->addStretch(1);
+    header->addWidget(m_settingsButton);
+    layout->addLayout(header);
+
+    m_preview = new PreviewWidget(m_recorderPage);
+    m_preview->setPlaceholder(tr("预览"), tr("选择模式后将显示画面"));
+    layout->addWidget(m_preview, 1);
+
+    m_modeGroup = new QButtonGroup(this);
+    m_modeGroup->setExclusive(true);
+    auto makeSeg = [this](const QString &text, const QString &pos, int id) {
+        auto *button = new QToolButton(m_recorderPage);
+        button->setText(text);
+        button->setCheckable(true);
+        button->setObjectName(QStringLiteral("segBtn"));
+        button->setProperty("pos", pos);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        m_modeGroup->addButton(button, id);
+        polishWidget(button);
+        return button;
+    };
+    m_modeScreenBtn = makeSeg(tr("整屏"), QStringLiteral("first"),
+                              int(RecordingController::CaptureMode::Screen));
+    m_modeRegionBtn = makeSeg(tr("区域"), QStringLiteral("middle"),
+                              int(RecordingController::CaptureMode::Region));
+    m_modeWindowBtn = makeSeg(tr("窗口"), QStringLiteral("last"),
+                              int(RecordingController::CaptureMode::Window));
+    m_modeScreenBtn->setChecked(true);
+    m_modeScreenBtn->setToolTip(tr("录制整个显示器"));
+    m_modeRegionBtn->setToolTip(tr("拖拽选择一部分屏幕"));
+    m_modeWindowBtn->setToolTip(tr("录制指定窗口"));
+
+    auto *modeRow = new QHBoxLayout;
+    modeRow->setSpacing(0);
+    modeRow->addWidget(m_modeScreenBtn);
+    modeRow->addWidget(m_modeRegionBtn);
+    modeRow->addWidget(m_modeWindowBtn);
+    layout->addLayout(modeRow);
+
+    m_screenRow = new QWidget(m_recorderPage);
+    auto *screenLayout = new QHBoxLayout(m_screenRow);
+    screenLayout->setContentsMargins(0, 0, 0, 0);
+    m_screenCombo = AppStyle::createComboBox(m_screenRow);
+    m_screenCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    screenLayout->addWidget(m_screenCombo);
+    layout->addWidget(m_screenRow);
+
+    m_regionRow = new QWidget(m_recorderPage);
     auto *regionLayout = new QHBoxLayout(m_regionRow);
     regionLayout->setContentsMargins(0, 0, 0, 0);
-    regionLayout->setSpacing(6);
+    regionLayout->setSpacing(8);
     m_regionLabel = new QLabel(m_regionRow);
     m_regionButton = new QPushButton(tr("选择区域"), m_regionRow);
+    m_clearRegionButton = new QPushButton(tr("清空"), m_regionRow);
+    m_regionButton->setCursor(Qt::PointingHandCursor);
+    m_clearRegionButton->setCursor(Qt::PointingHandCursor);
+    m_clearRegionButton->setToolTip(tr("清除已选区域"));
+    m_clearRegionButton->hide();
     regionLayout->addWidget(m_regionLabel, 1);
     regionLayout->addWidget(m_regionButton);
-    m_form->addRow(tr("区域"), m_regionRow);
+    regionLayout->addWidget(m_clearRegionButton);
+    layout->addWidget(m_regionRow);
 
-    m_windowRow = new QWidget(formBox);
+    m_windowRow = new QWidget(m_recorderPage);
     auto *windowLayout = new QHBoxLayout(m_windowRow);
     windowLayout->setContentsMargins(0, 0, 0, 0);
-    windowLayout->setSpacing(6);
-    m_windowCombo = new QComboBox(m_windowRow);
-    m_windowCombo->setMinimumContentsLength(24);
+    windowLayout->setSpacing(8);
+    m_windowCombo = AppStyle::createComboBox(m_windowRow);
+    m_windowCombo->setMinimumContentsLength(18);
     m_refreshWindowsButton = new QPushButton(tr("刷新"), m_windowRow);
+    m_refreshWindowsButton->setCursor(Qt::PointingHandCursor);
     windowLayout->addWidget(m_windowCombo, 1);
     windowLayout->addWidget(m_refreshWindowsButton);
-    m_form->addRow(tr("窗口"), m_windowRow);
+    layout->addWidget(m_windowRow);
 
-    auto *audioRow = new QWidget(formBox);
-    auto *audioLayout = new QHBoxLayout(audioRow);
-    audioLayout->setContentsMargins(0, 0, 0, 0);
-    audioLayout->setSpacing(12);
-    m_micCheck = new QCheckBox(tr("麦克风"), audioRow);
-    m_systemAudioCheck = new QCheckBox(tr("系统声音"), audioRow);
-    audioLayout->addWidget(m_micCheck);
-    audioLayout->addWidget(m_systemAudioCheck);
-    audioLayout->addStretch(1);
-    m_form->addRow(tr("音频"), audioRow);
+    auto *audioRow = new QHBoxLayout;
+    audioRow->setSpacing(8);
+    m_micCheck = new QCheckBox(tr("麦克风"), m_recorderPage);
+    m_systemAudioCheck = new QCheckBox(tr("系统声音"), m_recorderPage);
+    for (QCheckBox *box : {m_micCheck, m_systemAudioCheck}) {
+        box->setObjectName(QStringLiteral("chipCheck"));
+        box->setAttribute(Qt::WA_StyledBackground, true);
+        box->setCursor(Qt::PointingHandCursor);
+        box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        polishWidget(box);
+    }
+    m_micCheck->setIcon(AppIcons::mic());
+    m_systemAudioCheck->setIcon(AppIcons::speaker());
+    m_micCheck->setIconSize(QSize(16, 16));
+    m_systemAudioCheck->setIconSize(QSize(16, 16));
+    m_micCheck->setToolTip(tr("录制麦克风输入"));
+    m_systemAudioCheck->setToolTip(
+        tr("录制电脑正在播放的声音。开始前请先让内容出声。"));
+    audioRow->addWidget(m_micCheck);
+    audioRow->addWidget(m_systemAudioCheck);
+    layout->addLayout(audioRow);
 
-    auto *videoRow = new QWidget(formBox);
-    auto *videoLayout = new QHBoxLayout(videoRow);
-    videoLayout->setContentsMargins(0, 0, 0, 0);
-    videoLayout->setSpacing(6);
-    m_resolutionCombo = new QComboBox(videoRow);
+    m_startButton = new QPushButton(tr("开始录制"), m_recorderPage);
+    m_startButton->setObjectName(QStringLiteral("primaryButton"));
+    m_startButton->setIcon(AppIcons::record(Qt::white));
+    m_startButton->setIconSize(QSize(16, 16));
+    m_startButton->setCursor(Qt::PointingHandCursor);
+    m_startButton->setDefault(true);
+    layout->addWidget(m_startButton);
+
+    m_hintLabel = new QLabel(m_recorderPage);
+    m_hintLabel->setObjectName(QStringLiteral("hintLabel"));
+    m_hintLabel->setAlignment(Qt::AlignCenter);
+    m_hintLabel->setWordWrap(true);
+    layout->addWidget(m_hintLabel);
+}
+
+void MainWindow::setupSettingsPage()
+{
+    auto *pageLayout = new QVBoxLayout(m_settingsPage);
+    pageLayout->setContentsMargins(16, 14, 16, 14);
+    pageLayout->setSpacing(12);
+
+    auto *header = new QHBoxLayout;
+    header->setSpacing(4);
+    m_backButton = new QToolButton(m_settingsPage);
+    m_backButton->setObjectName(QStringLiteral("iconButton"));
+    m_backButton->setIcon(AppIcons::back());
+    m_backButton->setIconSize(QSize(20, 20));
+    m_backButton->setCursor(Qt::PointingHandCursor);
+    m_backButton->setToolTip(tr("返回"));
+    auto *title = new QLabel(tr("设置"), m_settingsPage);
+    title->setObjectName(QStringLiteral("titleLabel"));
+    header->addWidget(m_backButton);
+    header->addWidget(title);
+    header->addStretch(1);
+    pageLayout->addLayout(header);
+
+    auto *scroll = new QScrollArea(m_settingsPage);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto *inner = new QWidget;
+    inner->setObjectName(QStringLiteral("page"));
+    auto *innerLayout = new QVBoxLayout(inner);
+    innerLayout->setContentsMargins(0, 0, 4, 0);
+    innerLayout->setSpacing(12);
+
+    auto *saveFold = new SettingsFold(tr("保存位置"), inner);
+    innerLayout->addWidget(saveFold);
+    bindFold(saveFold, m_settings, QStringLiteral("save"));
+    auto *saveLayout = saveFold->bodyLayout();
+    m_pathEdit = new QLineEdit(inner);
+    m_pathEdit->setPlaceholderText(tr("视频保存目录"));
+    saveLayout->addWidget(m_pathEdit);
+    auto *pathButtons = new QWidget(inner);
+    auto *pathButtonLayout = new QHBoxLayout(pathButtons);
+    pathButtonLayout->setContentsMargins(0, 0, 0, 0);
+    pathButtonLayout->setSpacing(8);
+    m_browseButton = new QPushButton(tr("浏览"), pathButtons);
+    m_openFolderButton = new QPushButton(tr("打开"), pathButtons);
+    m_browseButton->setCursor(Qt::PointingHandCursor);
+    m_openFolderButton->setCursor(Qt::PointingHandCursor);
+    m_openFolderButton->setIcon(AppIcons::folder());
+    m_openFolderButton->setIconSize(QSize(14, 14));
+    m_browseButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_openFolderButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    pathButtonLayout->addWidget(m_browseButton);
+    pathButtonLayout->addWidget(m_openFolderButton);
+    saveLayout->addWidget(pathButtons);
+
+    auto *pictureFold = new SettingsFold(tr("画面"), inner);
+    innerLayout->addWidget(pictureFold);
+    bindFold(pictureFold, m_settings, QStringLiteral("picture"));
+    auto *pictureLayout = pictureFold->bodyLayout();
+    m_resolutionCombo = AppStyle::createComboBox(inner);
     m_resolutionCombo->addItem(tr("原始"), QSize());
     m_resolutionCombo->addItem(QStringLiteral("1080p"), QSize(1920, 1080));
     m_resolutionCombo->addItem(QStringLiteral("720p"), QSize(1280, 720));
-    m_fpsCombo = new QComboBox(videoRow);
-    m_fpsCombo->addItem(QStringLiteral("24 fps"), 24);
-    m_fpsCombo->addItem(QStringLiteral("30 fps"), 30);
-    m_fpsCombo->addItem(QStringLiteral("60 fps"), 60);
-    m_qualityCombo = new QComboBox(videoRow);
+    m_fpsCombo = AppStyle::createComboBox(inner);
+    m_fpsCombo->addItem(QStringLiteral("24 FPS"), 24);
+    m_fpsCombo->addItem(QStringLiteral("30 FPS"), 30);
+    m_fpsCombo->addItem(QStringLiteral("60 FPS"), 60);
+    m_qualityCombo = AppStyle::createComboBox(inner);
     m_qualityCombo->addItem(tr("低"), int(QMediaRecorder::LowQuality));
-    m_qualityCombo->addItem(tr("中"), int(QMediaRecorder::NormalQuality));
+    m_qualityCombo->addItem(tr("标准"), int(QMediaRecorder::NormalQuality));
     m_qualityCombo->addItem(tr("高"), int(QMediaRecorder::HighQuality));
-    m_qualityCombo->addItem(tr("很高"), int(QMediaRecorder::VeryHighQuality));
-    videoLayout->addWidget(m_resolutionCombo, 1);
-    videoLayout->addWidget(m_fpsCombo);
-    videoLayout->addWidget(m_qualityCombo);
-    m_form->addRow(tr("画面"), videoRow);
-
-    auto *pathRow = new QWidget(formBox);
-    auto *pathLayout = new QHBoxLayout(pathRow);
-    pathLayout->setContentsMargins(0, 0, 0, 0);
-    pathLayout->setSpacing(6);
-    m_pathEdit = new QLineEdit(pathRow);
-    m_browseButton = new QPushButton(tr("浏览"), pathRow);
-    m_openFolderButton = new QPushButton(tr("打开目录"), pathRow);
-    pathLayout->addWidget(m_pathEdit, 1);
-    pathLayout->addWidget(m_browseButton);
-    pathLayout->addWidget(m_openFolderButton);
-    m_form->addRow(tr("保存到"), pathRow);
-
-    m_countdownCombo = new QComboBox(formBox);
+    m_qualityCombo->addItem(tr("最高"), int(QMediaRecorder::VeryHighQuality));
+    m_countdownCombo = AppStyle::createComboBox(inner);
     m_countdownCombo->addItem(tr("立即开始"), 0);
-    m_countdownCombo->addItem(tr("3 秒"), 3);
-    m_countdownCombo->addItem(tr("5 秒"), 5);
-    m_form->addRow(tr("倒计时"), m_countdownCombo);
+    m_countdownCombo->addItem(tr("3 秒倒计时"), 3);
+    m_countdownCombo->addItem(tr("5 秒倒计时"), 5);
+    m_resolutionCombo->setToolTip(tr("限制输出分辨率。原始表示按采集尺寸编码。"));
+    m_fpsCombo->setToolTip(tr("目标帧率，实际帧率取决于屏幕刷新和机器性能。"));
+    m_qualityCombo->setToolTip(tr("编码器质量档。越高文件越大。"));
+    addSettingsField(pictureLayout, inner, tr("分辨率"), m_resolutionCombo);
+    addSettingsField(pictureLayout, inner, tr("帧率"), m_fpsCombo);
+    addSettingsField(pictureLayout, inner, tr("画质"), m_qualityCombo);
+    addSettingsField(pictureLayout, inner, tr("倒计时"), m_countdownCombo);
 
-    m_hotkeyCheck = new QCheckBox(tr("启用全局热键"), formBox);
-    m_form->addRow(tr("热键"), m_hotkeyCheck);
+    auto *hotkeyFold = new SettingsFold(tr("热键"), inner);
+    innerLayout->addWidget(hotkeyFold);
+    bindFold(hotkeyFold, m_settings, QStringLiteral("hotkey"));
+    auto *hotkeyLayout = hotkeyFold->bodyLayout();
+    m_hotkeyCheck = new QCheckBox(tr("启用全局热键"), inner);
+    m_hotkeyCheck->setObjectName(QStringLiteral("settingsCheck"));
+    m_hotkeyCheck->setCursor(Qt::PointingHandCursor);
+    hotkeyLayout->addWidget(m_hotkeyCheck);
 
-    m_hotkeyRow = new QWidget(formBox);
-    auto *hotkeyLayout = new QHBoxLayout(m_hotkeyRow);
-    hotkeyLayout->setContentsMargins(0, 0, 0, 0);
-    hotkeyLayout->setSpacing(6);
+    m_hotkeyRow = new QWidget(inner);
+    auto *hotkeyFields = new QVBoxLayout(m_hotkeyRow);
+    hotkeyFields->setContentsMargins(0, 0, 0, 0);
+    hotkeyFields->setSpacing(10);
     m_startHotkeyEdit = new QKeySequenceEdit(m_hotkeyRow);
     m_stopHotkeyEdit = new QKeySequenceEdit(m_hotkeyRow);
     m_pauseHotkeyEdit = new QKeySequenceEdit(m_hotkeyRow);
     m_startHotkeyEdit->setMaximumSequenceLength(1);
     m_stopHotkeyEdit->setMaximumSequenceLength(1);
     m_pauseHotkeyEdit->setMaximumSequenceLength(1);
-    hotkeyLayout->addWidget(new QLabel(tr("开始"), m_hotkeyRow));
-    hotkeyLayout->addWidget(m_startHotkeyEdit, 1);
-    hotkeyLayout->addWidget(new QLabel(tr("停止"), m_hotkeyRow));
-    hotkeyLayout->addWidget(m_stopHotkeyEdit, 1);
-    hotkeyLayout->addWidget(new QLabel(tr("暂停"), m_hotkeyRow));
-    hotkeyLayout->addWidget(m_pauseHotkeyEdit, 1);
-    m_form->addRow(QString(), m_hotkeyRow);
+    addSettingsField(hotkeyFields, m_hotkeyRow, tr("开始"), m_startHotkeyEdit);
+    addSettingsField(hotkeyFields, m_hotkeyRow, tr("停止"), m_stopHotkeyEdit);
+    addSettingsField(hotkeyFields, m_hotkeyRow, tr("暂停"), m_pauseHotkeyEdit);
+    hotkeyLayout->addWidget(m_hotkeyRow);
+    innerLayout->addStretch(1);
 
-    auto *buttons = new QHBoxLayout;
-    buttons->setSpacing(8);
-    m_startButton = new QPushButton(tr("开始录制"), central);
-    m_pauseButton = new QPushButton(tr("暂停"), central);
-    m_stopButton = new QPushButton(tr("停止"), central);
-    m_startButton->setMinimumHeight(36);
-    m_pauseButton->setMinimumHeight(36);
-    m_stopButton->setMinimumHeight(36);
-    m_startButton->setDefault(true);
-    buttons->addWidget(m_startButton, 1);
-    buttons->addWidget(m_pauseButton, 1);
-    buttons->addWidget(m_stopButton, 1);
+    scroll->setWidget(inner);
+    pageLayout->addWidget(scroll, 1);
 
-    auto *statusRow = new QHBoxLayout;
-    m_statusLabel = new QLabel(tr("就绪"), central);
-    m_durationLabel = new QLabel(QStringLiteral("00:00:00"), central);
-    QFont durationFont = m_durationLabel->font();
-    durationFont.setPointSize(durationFont.pointSize() + 4);
-    durationFont.setBold(true);
-    m_durationLabel->setFont(durationFont);
-    m_durationLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    statusRow->addWidget(m_statusLabel, 1);
-    statusRow->addWidget(m_durationLabel);
-
-    auto *fileRow = new QWidget(central);
-    auto *fileLayout = new QHBoxLayout(fileRow);
-    fileLayout->setContentsMargins(0, 0, 0, 0);
-    m_fileLabel = new QLabel(fileRow);
-    m_fileLabel->setWordWrap(true);
-    m_fileLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_fileLabel->setForegroundRole(QPalette::PlaceholderText);
-    m_openFileButton = new QPushButton(tr("打开文件"), fileRow);
-    m_openFileButton->setEnabled(false);
-    fileLayout->addWidget(m_fileLabel, 1);
-    fileLayout->addWidget(m_openFileButton);
-
-    auto *previewBox = new QGroupBox(tr("预览"), central);
-    auto *previewLayout = new QVBoxLayout(previewBox);
-    previewLayout->setContentsMargins(8, 8, 8, 8);
-    m_previewLabel = new QLabel(previewBox);
-    m_previewLabel->setMinimumHeight(160);
-    m_previewLabel->setAlignment(Qt::AlignCenter);
-    m_previewLabel->setStyleSheet(QStringLiteral("background: #111; color: #aaa;"));
-    m_previewLabel->setText(tr("空闲时每秒刷新一次缩略图，录制中关闭以免套娃。"));
-    previewLayout->addWidget(m_previewLabel);
-
-    auto *hint = new QLabel(
-        tr("录制中主窗口会隐藏。系统声音走 WASAPI 内录。悬浮条仍可能出现在整屏/窗口录像里。"),
-        central);
-    hint->setWordWrap(true);
-    hint->setForegroundRole(QPalette::PlaceholderText);
-
-    root->addWidget(formBox);
-    root->addLayout(buttons);
-    root->addLayout(statusRow);
-    root->addWidget(fileRow);
-    root->addWidget(previewBox, 1);
-    root->addWidget(hint);
-
-    setCentralWidget(central);
-    statusBar()->showMessage(tr("选择模式后点击开始录制"));
+    auto *version = new QLabel(
+        tr("ScreenRec %1").arg(QApplication::applicationVersion()), m_settingsPage);
+    version->setObjectName(QStringLiteral("hintLabel"));
+    version->setAlignment(Qt::AlignCenter);
+    pageLayout->addWidget(version);
 }
 
 void MainWindow::setupTray()
@@ -310,19 +528,22 @@ QIcon MainWindow::trayIcon() const
 void MainWindow::connectSignals()
 {
     connect(m_startButton, &QPushButton::clicked, this, &MainWindow::onStartClicked);
-    connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
-    connect(m_stopButton, &QPushButton::clicked, this, &MainWindow::onStopClicked);
     connect(m_browseButton, &QPushButton::clicked, this, &MainWindow::onBrowseClicked);
     connect(m_openFolderButton, &QPushButton::clicked, this, &MainWindow::onOpenFolderClicked);
-    connect(m_openFileButton, &QPushButton::clicked, this, &MainWindow::onOpenFileClicked);
     connect(m_screenCombo, &QComboBox::currentIndexChanged, this, &MainWindow::onScreenSelectionChanged);
     connect(m_regionButton, &QPushButton::clicked, this, &MainWindow::onSelectRegionClicked);
+    connect(m_clearRegionButton, &QPushButton::clicked, this, &MainWindow::onClearRegionClicked);
     connect(m_refreshWindowsButton, &QPushButton::clicked, this, &MainWindow::refreshWindows);
-    connect(m_modeCombo, &QComboBox::currentIndexChanged, this, &MainWindow::onModeChanged);
+    connect(m_modeGroup, &QButtonGroup::idClicked, this, [this](int) { onModeChanged(); });
     connect(m_hotkeyCheck, &QCheckBox::toggled, this, &MainWindow::applyHotkeys);
     connect(m_startHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
     connect(m_stopHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
     connect(m_pauseHotkeyEdit, &QKeySequenceEdit::editingFinished, this, &MainWindow::applyHotkeys);
+    connect(m_settingsButton, &QToolButton::clicked, this, &MainWindow::showSettingsPage);
+    connect(m_backButton, &QToolButton::clicked, this, &MainWindow::showRecorderPage);
+    connect(m_preview, &PreviewWidget::clicked, this, &MainWindow::onPreviewClicked);
+    connect(m_windowCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updatePreview);
+    connect(m_countdownCombo, &QComboBox::currentIndexChanged, this, &MainWindow::updateHint);
 
     connect(qGuiApp, &QGuiApplication::screenAdded, this, &MainWindow::refreshScreens);
     connect(qGuiApp, &QGuiApplication::screenRemoved, this, &MainWindow::refreshScreens);
@@ -376,9 +597,7 @@ void MainWindow::connectSignals()
         }
     });
     connect(m_controller, &RecordingController::durationChanged, this, [this](qint64 ms) {
-        const QString text = formatDuration(ms);
-        m_durationLabel->setText(text);
-        m_floatingBar->setDurationText(text);
+        m_floatingBar->setDurationText(formatDuration(ms));
     });
     connect(m_controller, &RecordingController::countdownTick, this, [this](int remaining) {
         m_countdownShown = remaining;
@@ -402,29 +621,13 @@ void MainWindow::connectSignals()
             m_tray->showMessage(QStringLiteral("ScreenRec"), message, QSystemTrayIcon::Warning, 3000);
     });
     connect(m_controller, &RecordingController::recordingFinished, this, [this](const QString &path) {
-        m_lastFile = path;
-        m_openFileButton->setEnabled(true);
-        m_fileLabel->setText(tr("已保存：%1").arg(QDir::toNativeSeparators(path)));
-        statusBar()->showMessage(tr("录制完成"), 5000);
+        const QString fileName = QFileInfo(path).fileName();
+        statusBar()->showMessage(tr("已保存  %1").arg(fileName), 5000);
         if (m_tray)
             m_tray->showMessage(QStringLiteral("ScreenRec"),
                                 tr("已保存到 %1").arg(QDir::toNativeSeparators(path)),
                                 QSystemTrayIcon::Information, 3000);
         restoreMainWindow();
-        if (m_closeAfterStop)
-            return;
-
-        QMessageBox box(this);
-        box.setWindowTitle(tr("录制完成"));
-        box.setText(tr("已保存到：\n%1").arg(QDir::toNativeSeparators(path)));
-        auto *openFile = box.addButton(tr("打开文件"), QMessageBox::AcceptRole);
-        auto *openDir = box.addButton(tr("打开目录"), QMessageBox::ActionRole);
-        box.addButton(tr("关闭"), QMessageBox::RejectRole);
-        box.exec();
-        if (box.clickedButton() == openFile)
-            QDesktopServices::openUrl(QUrl::fromLocalFile(path));
-        else if (box.clickedButton() == openDir)
-            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
     });
 }
 
@@ -443,9 +646,10 @@ void MainWindow::loadSettings()
     const int countdownIndex = m_countdownCombo->findData(countdown);
     m_countdownCombo->setCurrentIndex(countdownIndex >= 0 ? countdownIndex : 1);
 
-    const int modeIndex = m_modeCombo->findData(m_settings->captureMode());
-    if (modeIndex >= 0)
-        m_modeCombo->setCurrentIndex(modeIndex);
+    if (QAbstractButton *modeBtn = m_modeGroup->button(m_settings->captureMode()))
+        modeBtn->setChecked(true);
+    else
+        m_modeScreenBtn->setChecked(true);
 
     const int resIndex = m_resolutionCombo->findData(m_settings->maxResolution());
     m_resolutionCombo->setCurrentIndex(resIndex >= 0 ? resIndex : 0);
@@ -453,6 +657,23 @@ void MainWindow::loadSettings()
     m_fpsCombo->setCurrentIndex(fpsIndex >= 0 ? fpsIndex : 1);
     const int qualityIndex = m_qualityCombo->findData(m_settings->quality());
     m_qualityCombo->setCurrentIndex(qualityIndex >= 0 ? qualityIndex : 2);
+
+    restoreWindowGeometry();
+}
+
+void MainWindow::restoreWindowGeometry()
+{
+    QSize size = m_settings->windowSize();
+    if (size.width() >= minimumWidth() && size.height() >= minimumHeight()) {
+        if (QScreen *screen = QGuiApplication::primaryScreen()) {
+            const QSize avail = screen->availableGeometry().size();
+            size.setWidth(qBound(minimumWidth(), size.width(), avail.width()));
+            size.setHeight(qBound(minimumHeight(), size.height(), avail.height()));
+        }
+        resize(size);
+    }
+    if (m_settings->windowMaximized())
+        setWindowState(windowState() | Qt::WindowMaximized);
 }
 
 void MainWindow::refreshScreens()
@@ -517,13 +738,17 @@ void MainWindow::saveSettings()
     m_settings->setMaxResolution(m_resolutionCombo->currentData().toSize());
     m_settings->setLastScreenName(m_screenCombo->currentData().toString());
     m_settings->setCountdownSeconds(m_countdownCombo->currentData().toInt());
-    m_settings->setCaptureMode(m_modeCombo->currentData().toInt());
+    m_settings->setCaptureMode(int(currentMode()));
     m_settings->setRegion(m_region);
     m_settings->setLastWindowDescription(m_windowCombo->currentText());
     m_settings->setHotkeysEnabled(m_hotkeyCheck->isChecked());
     m_settings->setStartHotkey(m_startHotkeyEdit->keySequence());
     m_settings->setStopHotkey(m_stopHotkeyEdit->keySequence());
     m_settings->setPauseHotkey(m_pauseHotkeyEdit->keySequence());
+    if (!isMinimized()) {
+        m_settings->setWindowSize(isMaximized() ? normalGeometry().size() : size());
+        m_settings->setWindowMaximized(isMaximized());
+    }
 }
 
 void MainWindow::updateModeRows()
@@ -532,45 +757,56 @@ void MainWindow::updateModeRows()
     const bool region = mode == RecordingController::CaptureMode::Region;
     const bool window = mode == RecordingController::CaptureMode::Window;
 
+    m_screenRow->setVisible(!window);
     m_regionRow->setVisible(region);
-    if (QWidget *label = m_form->labelForField(m_regionRow))
-        label->setVisible(region);
-
     m_windowRow->setVisible(window);
-    if (QWidget *label = m_form->labelForField(m_windowRow))
-        label->setVisible(window);
-
-    m_screenCombo->setVisible(!window);
-    if (QWidget *label = m_form->labelForField(m_screenCombo))
-        label->setVisible(!window);
 }
 
 void MainWindow::updateRegionLabel()
 {
-    if (m_region.width() >= 16 && m_region.height() >= 16) {
-        m_regionLabel->setText(tr("%1, %2  %3×%4")
-                                   .arg(m_region.x())
-                                   .arg(m_region.y())
-                                   .arg(m_region.width())
-                                   .arg(m_region.height()));
+    const bool hasRegion = m_region.width() >= 16 && m_region.height() >= 16;
+    if (hasRegion) {
+        m_regionLabel->setText(tr("%1 × %2").arg(m_region.width()).arg(m_region.height()));
+        m_regionLabel->setToolTip(tr("位置 %1, %2").arg(m_region.x()).arg(m_region.y()));
     } else {
-        m_regionLabel->setText(tr("未选择"));
+        m_regionLabel->setText(tr("未选择区域"));
+        m_regionLabel->setToolTip(QString());
     }
+    if (m_clearRegionButton)
+        m_clearRegionButton->setVisible(hasRegion);
+}
+
+void MainWindow::updateHint()
+{
+    if (!m_hintLabel || !m_countdownCombo)
+        return;
+
+    QStringList parts;
+    const int countdown = m_countdownCombo->currentData().toInt();
+    if (countdown > 0)
+        parts << tr("%1 秒倒计时").arg(countdown);
+    if (m_hotkeyCheck->isChecked() && !m_startHotkeyEdit->keySequence().isEmpty()) {
+        parts << tr("%1 开始")
+                     .arg(m_startHotkeyEdit->keySequence().toString(QKeySequence::NativeText));
+    }
+    m_hintLabel->setText(parts.join(QStringLiteral("  ·  ")));
+    m_hintLabel->setVisible(!parts.isEmpty());
 }
 
 void MainWindow::updateUi()
 {
     const auto state = m_controller->state();
     const bool idle = state == RecordingController::State::Idle;
-    const bool countdown = state == RecordingController::State::Countdown;
-    const bool recording = state == RecordingController::State::Recording;
-    const bool paused = state == RecordingController::State::Paused;
 
-    m_modeCombo->setEnabled(idle);
+    m_modeScreenBtn->setEnabled(idle);
+    m_modeRegionBtn->setEnabled(idle);
+    m_modeWindowBtn->setEnabled(idle);
     m_screenCombo->setEnabled(idle);
     m_windowCombo->setEnabled(idle);
     m_refreshWindowsButton->setEnabled(idle);
     m_regionButton->setEnabled(idle);
+    if (m_clearRegionButton)
+        m_clearRegionButton->setEnabled(idle);
     m_micCheck->setEnabled(idle);
     m_systemAudioCheck->setEnabled(idle);
     m_resolutionCombo->setEnabled(idle);
@@ -580,31 +816,27 @@ void MainWindow::updateUi()
     m_browseButton->setEnabled(idle);
     m_countdownCombo->setEnabled(idle);
     m_hotkeyCheck->setEnabled(idle);
-    m_hotkeyRow->setEnabled(idle);
+    m_hotkeyRow->setEnabled(idle && m_hotkeyCheck->isChecked());
+    m_settingsButton->setEnabled(idle);
 
-    m_startButton->setEnabled(idle || countdown);
-    m_startButton->setText(countdown ? tr("取消倒计时") : tr("开始录制"));
-    m_pauseButton->setEnabled(recording || paused);
-    m_pauseButton->setText(paused ? tr("继续") : tr("暂停"));
-    m_stopButton->setEnabled(recording || paused);
+    m_startButton->setEnabled(idle);
 
     switch (state) {
     case RecordingController::State::Idle:
-        m_statusLabel->setText(tr("就绪"));
-        m_durationLabel->setText(formatDuration(0));
         m_floatingBar->setDurationText(formatDuration(0));
+        statusBar()->showMessage(tr("就绪"));
         break;
     case RecordingController::State::Countdown:
-        m_statusLabel->setText(tr("倒计时 %1").arg(m_countdownShown));
+        statusBar()->showMessage(tr("倒计时 %1").arg(m_countdownShown));
         break;
     case RecordingController::State::Recording:
-        m_statusLabel->setText(tr("录制中"));
+        statusBar()->showMessage(tr("录制中"));
         break;
     case RecordingController::State::Paused:
-        m_statusLabel->setText(tr("已暂停"));
+        statusBar()->showMessage(tr("已暂停"));
         break;
     case RecordingController::State::Stopping:
-        m_statusLabel->setText(tr("正在保存…"));
+        statusBar()->showMessage(tr("正在保存…"));
         break;
     }
 }
@@ -677,7 +909,6 @@ void MainWindow::actuallyStart()
                                 request.countdownSeconds);
     }
 
-    m_fileLabel->clear();
     m_controller->start(request);
 }
 
@@ -719,6 +950,14 @@ void MainWindow::onSelectRegionClicked()
     beginRegionSelect();
 }
 
+void MainWindow::onClearRegionClicked()
+{
+    m_region = QRect();
+    updateRegionLabel();
+    updatePreview();
+    saveSettings();
+}
+
 void MainWindow::beginRegionSelect()
 {
     hide();
@@ -740,11 +979,25 @@ void MainWindow::onScreenSelectionChanged()
     updatePreview();
 }
 
-void MainWindow::onOpenFileClicked()
+void MainWindow::onPreviewClicked()
 {
-    if (m_lastFile.isEmpty())
-        return;
-    QDesktopServices::openUrl(QUrl::fromLocalFile(m_lastFile));
+    if (currentMode() == RecordingController::CaptureMode::Region)
+        onSelectRegionClicked();
+}
+
+void MainWindow::showSettingsPage()
+{
+    m_stack->setCurrentWidget(m_settingsPage);
+    syncPreviewTimer();
+}
+
+void MainWindow::showRecorderPage()
+{
+    saveSettings();
+    updateHint();
+    m_stack->setCurrentWidget(m_recorderPage);
+    syncPreviewTimer();
+    updatePreview();
 }
 
 void MainWindow::clampRegion()
@@ -763,7 +1016,8 @@ void MainWindow::syncPreviewTimer()
         return;
     const bool run = isVisible() && !isMinimized()
         && m_controller->state() == RecordingController::State::Idle
-        && currentMode() != RecordingController::CaptureMode::Window;
+        && currentMode() != RecordingController::CaptureMode::Window
+        && m_stack->currentWidget() == m_recorderPage;
     if (run) {
         if (!m_previewTimer->isActive())
             m_previewTimer->start();
@@ -774,42 +1028,51 @@ void MainWindow::syncPreviewTimer()
 
 void MainWindow::updatePreview()
 {
-    if (!m_previewLabel)
+    if (!m_preview)
         return;
     if (!isVisible() || isMinimized())
         return;
     if (m_controller->state() != RecordingController::State::Idle) {
-        m_previewLabel->setPixmap({});
-        m_previewLabel->setText(tr("录制中"));
+        m_preview->setPlaceholder(tr("录制中"));
+        m_preview->setClickable(false);
         return;
     }
     if (currentMode() == RecordingController::CaptureMode::Window) {
-        m_previewLabel->setPixmap({});
-        m_previewLabel->setText(tr("窗口模式不抓取实时预览"));
+        const QString name = m_windowCombo->currentText();
+        m_preview->setPlaceholder(name.isEmpty() ? tr("没有可录制的窗口") : name,
+                                  tr("窗口模式不显示实时画面"));
+        m_preview->setClickable(false);
+        return;
+    }
+
+    const bool regionMode = currentMode() == RecordingController::CaptureMode::Region;
+    const bool hasRegion = m_region.width() >= 16 && m_region.height() >= 16;
+    m_preview->setClickable(regionMode);
+
+    if (regionMode && !hasRegion) {
+        m_preview->setPlaceholder(tr("选择录制区域"), tr("点击此处拖拽选择"));
         return;
     }
 
     QScreen *screen = selectedScreen();
     if (!screen) {
-        m_previewLabel->setText(tr("没有可用显示器"));
+        m_preview->setPlaceholder(tr("没有可用显示器"));
+        m_preview->setClickable(false);
         return;
     }
 
-    const bool region = currentMode() == RecordingController::CaptureMode::Region
-        && m_region.width() >= 16 && m_region.height() >= 16;
-
     QPixmap grab;
-    if (region)
+    if (regionMode)
         grab = screen->grabWindow(0, m_region.x(), m_region.y(), m_region.width(), m_region.height());
     else
         grab = screen->grabWindow(0);
 
     if (grab.isNull()) {
-        m_previewLabel->setText(tr("无法抓取预览"));
+        m_preview->setPlaceholder(tr("无法抓取预览"));
         return;
     }
 
-    if (region) {
+    if (regionMode) {
         const qreal dpr = screen->devicePixelRatio();
         const QSize physicalScreen(qRound(screen->size().width() * dpr),
                                    qRound(screen->size().height() * dpr));
@@ -825,10 +1088,13 @@ void MainWindow::updatePreview()
             if (crop.width() >= 8 && crop.height() >= 8)
                 grab = grab.copy(crop);
         }
+        m_preview->setFrame(grab);
+        m_preview->setBadge(tr("%1 × %2").arg(m_region.width()).arg(m_region.height()));
+        return;
     }
 
-    m_previewLabel->setPixmap(grab.scaled(m_previewLabel->size(), Qt::KeepAspectRatio,
-                                          Qt::FastTransformation));
+    m_preview->setFrame(grab);
+    m_preview->setBadge(QString());
 }
 
 void MainWindow::onHotkey(int id)
@@ -856,6 +1122,11 @@ void MainWindow::onHotkey(int id)
 
 void MainWindow::applyHotkeys()
 {
+    updateHint();
+    if (m_hotkeyRow && m_hotkeyCheck) {
+        const bool idle = m_controller->state() == RecordingController::State::Idle;
+        m_hotkeyRow->setEnabled(idle && m_hotkeyCheck->isChecked());
+    }
     if (!m_hotkeysReady)
         return;
 
@@ -904,7 +1175,10 @@ QScreen *MainWindow::selectedScreen() const
 
 RecordingController::CaptureMode MainWindow::currentMode() const
 {
-    return RecordingController::CaptureMode(m_modeCombo->currentData().toInt());
+    const int id = m_modeGroup ? m_modeGroup->checkedId() : 0;
+    if (id < 0)
+        return RecordingController::CaptureMode::Screen;
+    return RecordingController::CaptureMode(id);
 }
 
 RecordingController::Request MainWindow::currentRequest() const

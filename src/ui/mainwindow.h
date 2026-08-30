@@ -10,20 +10,23 @@ class AppSettings;
 class CountdownOverlay;
 class FloatingBar;
 class HotkeyManager;
+class PreviewWidget;
 class RegionSelector;
+class QButtonGroup;
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
 class QEvent;
-class QFormLayout;
 class QHideEvent;
 class QKeySequenceEdit;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QShowEvent;
+class QStackedWidget;
 class QSystemTrayIcon;
 class QTimer;
+class QToolButton;
 
 class MainWindow : public QMainWindow
 {
@@ -41,6 +44,8 @@ protected:
 
 private:
     void setupUi();
+    void setupRecorderPage();
+    void setupSettingsPage();
     void setupTray();
     void connectSignals();
     void refreshScreens();
@@ -51,6 +56,7 @@ private:
     void updateModeRows();
     void updateRegionLabel();
     void updateFloatingBar();
+    void updateHint();
     void placeFloatingBar();
     void applyHotkeys();
     void onStartClicked();
@@ -59,6 +65,8 @@ private:
     void onBrowseClicked();
     void onOpenFolderClicked();
     void onSelectRegionClicked();
+    void onClearRegionClicked();
+    void restoreWindowGeometry();
     void onModeChanged();
     void onHotkey(int id);
     void beginRegionSelect();
@@ -68,8 +76,10 @@ private:
     void updatePreview();
     void syncPreviewTimer();
     void clampRegion();
-    void onOpenFileClicked();
+    void onPreviewClicked();
     void onScreenSelectionChanged();
+    void showSettingsPage();
+    void showRecorderPage();
     QScreen *selectedScreen() const;
     RecordingController::CaptureMode currentMode() const;
     RecordingController::Request currentRequest() const;
@@ -83,8 +93,17 @@ private:
     HotkeyManager *m_hotkeys = nullptr;
     QSystemTrayIcon *m_tray = nullptr;
 
-    QFormLayout *m_form = nullptr;
-    QComboBox *m_modeCombo = nullptr;
+    QStackedWidget *m_stack = nullptr;
+    QWidget *m_recorderPage = nullptr;
+    QWidget *m_settingsPage = nullptr;
+    QButtonGroup *m_modeGroup = nullptr;
+    QToolButton *m_modeScreenBtn = nullptr;
+    QToolButton *m_modeRegionBtn = nullptr;
+    QToolButton *m_modeWindowBtn = nullptr;
+    QToolButton *m_settingsButton = nullptr;
+    QToolButton *m_backButton = nullptr;
+    PreviewWidget *m_preview = nullptr;
+
     QComboBox *m_screenCombo = nullptr;
     QComboBox *m_windowCombo = nullptr;
     QComboBox *m_countdownCombo = nullptr;
@@ -94,6 +113,7 @@ private:
     QComboBox *m_resolutionCombo = nullptr;
     QComboBox *m_fpsCombo = nullptr;
     QComboBox *m_qualityCombo = nullptr;
+    QWidget *m_screenRow = nullptr;
     QWidget *m_regionRow = nullptr;
     QWidget *m_windowRow = nullptr;
     QWidget *m_hotkeyRow = nullptr;
@@ -102,20 +122,14 @@ private:
     QPushButton *m_browseButton = nullptr;
     QPushButton *m_openFolderButton = nullptr;
     QPushButton *m_regionButton = nullptr;
+    QPushButton *m_clearRegionButton = nullptr;
     QPushButton *m_refreshWindowsButton = nullptr;
     QPushButton *m_startButton = nullptr;
-    QPushButton *m_pauseButton = nullptr;
-    QPushButton *m_stopButton = nullptr;
     QKeySequenceEdit *m_startHotkeyEdit = nullptr;
     QKeySequenceEdit *m_stopHotkeyEdit = nullptr;
     QKeySequenceEdit *m_pauseHotkeyEdit = nullptr;
-    QLabel *m_statusLabel = nullptr;
-    QLabel *m_durationLabel = nullptr;
-    QLabel *m_fileLabel = nullptr;
-    QLabel *m_previewLabel = nullptr;
-    QPushButton *m_openFileButton = nullptr;
+    QLabel *m_hintLabel = nullptr;
     QTimer *m_previewTimer = nullptr;
-    QString m_lastFile;
 
     QRect m_region;
     bool m_closeAfterStop = false;

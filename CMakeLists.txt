@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(ScreenRec VERSION 1.0.0 LANGUAGES CXX)
+project(ScreenRec VERSION 1.1.0 LANGUAGES CXX)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Multimedia)
 
@@ -20,6 +20,10 @@ qt_add_executable(ScreenRec
     src/main.cpp
     src/ui/mainwindow.cpp
     src/ui/mainwindow.h
+    src/ui/appstyle.cpp
+    src/ui/appstyle.h
+    src/ui/previewwidget.cpp
+    src/ui/previewwidget.h
     src/ui/countdownoverlay.cpp
     src/ui/countdownoverlay.h
     src/ui/regionselector.cpp
