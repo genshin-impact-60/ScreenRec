@@ -1,0 +1,27 @@
+# Build and pack output
+build/
+build-release/
+dist/
+out/
+cmake-build-*/
+
+# Qt Creator / CMake / IDEs
+.qtcreator/
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+CMakeUserPresets.json
+*.user
+*.autosave
+.idea/
+.vs/
+.vscode/
+
+# Compiler / OS junk
+*.obj
+*.o
+*.exe
+*.dll
+*.a
+Thumbs.db
+Desktop.ini
+.DS_Store
